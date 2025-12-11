@@ -2514,21 +2514,25 @@
                     return;
                 }
 
-                const params = new URLSearchParams();
-                params.set('world', worldId);
-                params.set('view', viewMode);
+                const timeoutId = setTimeout(() => {
+                    const params = new URLSearchParams();
+                    params.set('world', worldId);
+                    params.set('view', viewMode);
 
-                if (selectedArticle) {
-                    params.set('article', selectedArticle.id);
-                }
+                    if (selectedArticle) {
+                        params.set('article', selectedArticle.id);
+                    }
 
-                const newUrl = `${window.location.pathname}?${params.toString()}`;
-                const currentUrl = `${window.location.pathname}${window.location.search}`;
+                    const newUrl = `${window.location.pathname}?${params.toString()}`;
+                    const currentUrl = `${window.location.pathname}${window.location.search}`;
 
-                if (newUrl !== currentUrl) {
-                    window.history.pushState({ viewMode, worldId, articleId: selectedArticle?.id }, '', newUrl);
-                    console.log('URL更新:', newUrl);
-                }
+                    if (newUrl !== currentUrl) {
+                        window.history.pushState({ viewMode, worldId, articleId: selectedArticle?.id }, '', newUrl);
+                        console.log('URL更新:', newUrl);
+                    }
+                }, 1000);
+
+                return () => clearTimeout(timeoutId);
             }, [viewMode, selectedArticle, worldId, user]);
 
             // ブラウザの戻る/進むボタンに対応
