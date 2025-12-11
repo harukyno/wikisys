@@ -1950,7 +1950,16 @@
 
                     const openTarget = (target) => {
                         if (onSelectArticle) onSelectArticle(target);
-                        if (window.setAppViewMode) window.setAppViewMode('single_article');
+
+                        const y = getArticleYear(target);
+                        const hasYear = y && Number(y) !== 0 && !target.noYear;
+
+                        if (hasYear) {
+                            if (window.setAppViewMode) window.setAppViewMode('timeline_large');
+                        } else {
+                            if (window.setAppViewMode) window.setAppViewMode('single_article');
+                        }
+
                         if (typeof onResetFilters !== 'undefined' && onResetFilters) onResetFilters();
                         else if (typeof onSearchChange === 'function') onSearchChange({ type: 'all', keyword: '', tag: '', excludeNoYear: true });
                     };
@@ -2486,8 +2495,9 @@
                     if (article) {
                         isRestoringFromURL.current = true;
                         setSelectedArticle(article);
-                        setViewMode('single_article');
-                        console.log('URL復元: 記事表示', article.title);
+                        if (urlView) setViewMode(urlView);
+                        else setViewMode('single_article');
+                        console.log('URL復元: 記事表示', article.title, urlView);
                     }
                 } else if (urlView && urlView !== viewMode) {
                     // ビューモードのみ指定されている場合
@@ -2508,7 +2518,7 @@
                 params.set('world', worldId);
                 params.set('view', viewMode);
 
-                if (selectedArticle && viewMode === 'single_article') {
+                if (selectedArticle) {
                     params.set('article', selectedArticle.id);
                 }
 
