@@ -2472,7 +2472,8 @@
             const [timelineFilters, setTimelineFilters] = React.useState({ type: 'all', keyword: '', tag: '', excludeNoYear: true, onlyApproved: false });
 
             const [tagArticleInput, setTagArticleInput] = React.useState('');
-            const isRestoringFromURL = React.useRef(false); // URL復元中のフラグ
+            const isRestoringFromURL = React.useRef(false);
+            const hasCheckedWorldURL = React.useRef(false); // URL復元中のフラグ
 
             // Expose setViewMode to window for deep component access (hacky but effective for current structure)
             React.useEffect(() => { window.setAppViewMode = setViewMode; return () => delete window.setAppViewMode; }, []);
@@ -2481,6 +2482,21 @@
             const editorRef = React.useRef(null);
             const htmlTextareaRef = React.useRef(null);
 
+            React.useEffect(() => {
+                if (!user || !db || hasCheckedWorldURL.current) return;
+                const params = new URLSearchParams(window.location.search);
+                const urlWorldId = params.get('world');
+                if (urlWorldId) {
+                    hasCheckedWorldURL.current = true;
+                    isRestoringFromURL.current = true;
+                    setWorldId(urlWorldId);
+                    setViewMode('timeline_large');
+                    console.log('URL復元: 世界選択', urlWorldId);
+                } else {
+                    hasCheckedWorldURL.current = true;
+                }
+            }, [user, db]);
+
             // URLから状態を復元（初回読み込み時）
             React.useEffect(() => {
                 if (!user || !worldId || articles.length === 0 || isRestoringFromURL.current) return;
@@ -2488,6 +2504,12 @@
                 const params = new URLSearchParams(window.location.search);
                 const urlView = params.get('view');
                 const urlArticleId = params.get('article');
+                const urlKeyword = params.get('keyword');
+                const urlTag = params.get('tag');
+                const urlMapQuery = params.get('mapQuery');
+                const urlMapImportance = params.get('mapImportance');
+
+                let updated = false;
 
                 if (urlArticleId) {
                     // 記事IDが指定されている場合、その記事を表示
@@ -2505,6 +2527,28 @@
                     setViewMode(urlView);
                     console.log('URL復元: ビューモード', urlView);
                 }
+
+                if (urlKeyword || urlTag) {
+                    setTimelineFilters(prev => ({ ...prev, keyword: urlKeyword || '', tag: urlTag || '' }));
+                    console.log('URL復元: 検索条件', { keyword: urlKeyword, tag: urlTag });
+                    updated = true;
+                }
+
+                if (urlMapQuery) {
+                    setMapTabQuery(urlMapQuery);
+                    console.log('URL復元: マップクエリ', urlMapQuery);
+                    updated = true;
+                }
+
+                if (urlMapImportance) {
+                    setMapTabImportance(Number(urlMapImportance));
+                    console.log('URL復元: マップ重要度', urlMapImportance);
+                    updated = true;
+                }
+
+                if (updated) {
+                    isRestoringFromURL.current = true;
+                }
             }, [user, worldId, articles]);
 
             // 状態が変更されたらURLを更新（ブラウザの履歴に追加）
@@ -2521,6 +2565,20 @@
 
                     if (selectedArticle) {
                         params.set('article', selectedArticle.id);
+                    }
+
+                    if (timelineFilters.keyword) {
+                        params.set('keyword', timelineFilters.keyword);
+                    }
+                    if (timelineFilters.tag) {
+                        params.set('tag', timelineFilters.tag);
+                    }
+
+                    if (viewMode === 'map' && mapTabQuery) {
+                        params.set('mapQuery', mapTabQuery);
+                    }
+                    if (viewMode === 'map' && mapTabImportance > 0) {
+                        params.set('mapImportance', mapTabImportance.toString());
                     }
 
                     const newUrl = `${window.location.pathname}?${params.toString()}`;
