@@ -2909,9 +2909,24 @@
                     const hasYear = !data.noYear && data.year && Number(data.year) !== 0;
 
                     // 編集前のビューモードを考慮しつつ、適切なビューに遷移
-                    if (previousViewMode === 'timeline_noyear' && !hasYear) {
-                        // 年代なしビューから編集し、年代なしのまま → 年代なしビューに戻る
-                        setViewMode('timeline_noyear');
+                    if (previousViewMode === 'timeline_large') {
+                        // 構造年表から編集した場合
+                        if (hasYear) {
+                            // 年代ありのまま → 構造年表に戻る
+                            setViewMode('timeline_large');
+                        } else {
+                            // 年代を削除した → 年代なし一覧に遷移
+                            setViewMode('timeline_noyear');
+                        }
+                    } else if (previousViewMode === 'timeline_noyear') {
+                        // 年代なし一覧から編集した場合
+                        if (!hasYear) {
+                            // 年代なしのまま → 年代なし一覧に戻る
+                            setViewMode('timeline_noyear');
+                        } else {
+                            // 年代を追加した → 構造年表に遷移
+                            setViewMode('timeline_large');
+                        }
                     } else if (previousViewMode === 'single_article') {
                         // 単独記事表示から編集 → 単独記事表示に戻る
                         setViewMode('single_article');
@@ -2919,7 +2934,7 @@
                         // 一覧から編集 → 一覧に戻る
                         setViewMode('list');
                     } else {
-                        // その他の場合は年代に基づいて判定
+                        // その他の場合（デフォルト）は年代に基づいて判定
                         if (hasYear) {
                             setViewMode('timeline_large');
                         } else {
@@ -3204,7 +3219,7 @@
                                         <span className="hidden sm:inline">承認済のみ</span>
                                     </button>
                                 )}
-                                <div className="hidden lg:flex items-center text-[11px] text-gray-400"><Icon name="filter" size={12} className="mr-1" /> {timelineSummary} {timelineFilters.onlyApproved && <span className="text-emerald-600 font-bold ml-1">(ON)</span>}</div>{(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}{['owner', 'editor', 'admin'].includes(myRole) && <button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> 作成</button>}</div>
+                                <div className="hidden lg:flex items-center text-[11px] text-gray-400"><Icon name="filter" size={12} className="mr-1" /> {timelineSummary} {timelineFilters.onlyApproved && <span className="text-emerald-600 font-bold ml-1">(ON)</span>}</div>{(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}{['owner', 'editor', 'admin'].includes(myRole) && <button onClick={() => { setPreviousViewMode(viewMode); setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> 作成</button>}</div>
                         </header>
                         <div className="flex-1 overflow-y-auto relative bg-slate-50">
                             {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
