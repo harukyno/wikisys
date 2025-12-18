@@ -253,12 +253,14 @@
             organization: { label: '組織', color: 'bg-purple-100 text-purple-800', icon: 'building' },
             ideology: { label: '思想・宗教', color: 'bg-emerald-100 text-emerald-800', icon: 'star' },
             item: { label: '物品', color: 'bg-amber-100 text-amber-800', icon: 'package' },
+            story: { label: '物語', color: 'bg-pink-100 text-pink-800', icon: 'book-open' },
             other: { label: 'その他', color: 'bg-gray-100 text-gray-800', icon: 'box' }
         };
 
         // ビュー設定：構造年表（Large Timeline）をメインの年表として統合
         const VIEW_TABS = [
-            { key: 'list', label: '一覧', icon: 'list' },
+            { key: 'list', label: '総記', icon: 'list' },
+            { key: 'story', label: '物語', icon: 'book' },
             { key: 'map', label: '地図', icon: 'map' },
             { key: 'timeline_large', label: '構造年表', icon: 'git-branch' },
             { key: 'stats', label: '統計', icon: 'bar-chart-2' }
@@ -1473,7 +1475,7 @@
                 <div className="select-none">
                     <div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition ${isSelected ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-slate-700 text-slate-300'}`} style={{ paddingLeft: `${depth * 16 + 8}px` }} onClick={() => { if (node.articles.length > 0) onSelect(node); else setIsOpen(!isOpen); }}>
                         {hasChildren ? (<span onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} className="p-0.5 hover:bg-slate-600 rounded text-slate-400"><Icon name={isOpen ? "chevron-down" : "chevron-right"} size={14} /></span>) : (<span className="w-4"></span>)}
-                        <Icon name={hasChildren ? (isOpen ? "folder-open" : "folder") : "folder"} size={14} className={hasChildren ? "text-indigo-400" : "text-slate-500"} />
+                        <Icon name={node.icon || (hasChildren ? (isOpen ? "folder-open" : "folder") : "folder")} size={14} className={hasChildren || node.icon ? "text-indigo-400" : "text-slate-500"} />
                         <span className="truncate text-sm flex-1">{name}</span>
                         {node.articles.length > 0 && <span className="text-[10px] bg-slate-700 px-1.5 rounded-full text-slate-300">{node.articles.length}</span>}
                     </div>
@@ -1482,10 +1484,12 @@
             );
         };
 
-        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange, onlyApproved = false, onlyUnapproved = false }) => {
+        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange, onlyApproved = false, onlyUnapproved = false, filterFn = null }) => {
             const [selectedFolderNode, setSelectedFolderNode] = React.useState(null);
             const [query, setQuery] = React.useState('');
             const [showSidebar, setShowSidebar] = React.useState(false);
+            const [layoutStyle, setLayoutStyle] = React.useState('list'); // 'list' | 'grid'
+
             const handleContentClick = (e) => {
                 const link = e.target.closest && e.target.closest('.wiki-link');
                 if (!link) return;
@@ -1495,7 +1499,6 @@
                 if (id) {
                     const target = articles.find(a => a.id === id);
                     if (target) {
-                        // 記事の年代状態に応じてフィルタを調整
                         const y = getArticleYear(target);
                         const hasYear = y && y !== 0 && !target.noYear;
                         if (typeof onSearchChange === 'function') {
@@ -1504,15 +1507,12 @@
                         if (onSelectArticle) onSelectArticle(target);
                     } else alert('リンク先の記事が見つかりません');
                 } else if (wikiTitle) {
-                    // handle special wiki titles (例: 年代なし)
                     if (wikiTitle === '年代なし' && onOpenNoYear) {
                         onOpenNoYear();
                         return;
                     }
-                    // fallback: try find by exact title
                     const target = articles.find(a => (a.title || '').trim() === wikiTitle.trim());
                     if (target) {
-                        // 記事の年代状態に応じてフィルタを調整
                         const y = getArticleYear(target);
                         const hasYear = y && y !== 0 && !target.noYear;
                         if (typeof onSearchChange === 'function') {
@@ -1522,60 +1522,130 @@
                     } else alert('リンク先の記事が見つかりません');
                 }
             };
+
             const folderTree = React.useMemo(() => {
                 const root = { name: 'root', fullPath: '', children: {}, articles: [] };
-                const allArticlesNode = { name: 'すべての記事', fullPath: 'ALL', children: {}, articles: articles };
-                const uncategorizedNode = { name: '未分類', fullPath: '未分類', children: {}, articles: [] };
-                articles.forEach(article => {
-                    const folderPath = article.folder || '未分類';
-                    if (folderPath === '未分類') uncategorizedNode.articles.push(article);
-                    else {
-                        const parts = folderPath.split('/').filter(Boolean);
-                        let current = root;
-                        let currentPath = '';
-                        parts.forEach((part) => {
-                            currentPath = currentPath ? `${currentPath}/${part}` : part;
-                            if (!current.children[part]) current.children[part] = { name: part, fullPath: currentPath, children: {}, articles: [] };
-                            current = current.children[part];
-                        });
-                        current.articles.push(article);
+                // フィルタ適用後の記事リストでツリーを構築
+                let targetArticles = articles;
+                if (filterFn) {
+                    targetArticles = articles.filter(filterFn);
+                }
+
+                const allArticlesNode = { name: 'すべての記事', fullPath: 'ALL', children: {}, articles: targetArticles, icon: 'layers' };
+                const uncategorizedNode = { name: '未分類', fullPath: '未分類', children: {}, articles: [], icon: 'inbox' };
+                const rootDocsNode = { name: '(ルート)', fullPath: '(root)', children: {}, articles: [], icon: 'file' };
+
+                targetArticles.forEach(article => {
+                    const hasFolder = !!article.folder;
+                    const hasTags = article.tags && article.tags.length > 0;
+                    const hasPendingTag = hasTags && article.tags.includes('分類待ち');
+
+                    if (!hasFolder) {
+                        // フォルダなしの場合の振り分けロジック
+                        // タグなし、または「分類待ち」タグがある場合は「未分類」へ
+                        if (!hasTags || hasPendingTag) {
+                            uncategorizedNode.articles.push(article);
+                        } else {
+                            // タグはあるがフォルダ指定がないものはルート直下へ（便宜上 (ルート) フォルダに入れる）
+                            rootDocsNode.articles.push(article);
+                        }
+                    } else {
+                        // フォルダあり
+                        if (article.folder === '未分類') {
+                            uncategorizedNode.articles.push(article);
+                        } else {
+                            const parts = article.folder.split('/').filter(Boolean);
+                            let current = root;
+                            let currentPath = '';
+                            parts.forEach((part) => {
+                                currentPath = currentPath ? `${currentPath}/${part}` : part;
+                                if (!current.children[part]) current.children[part] = { name: part, fullPath: currentPath, children: {}, articles: [] };
+                                current = current.children[part];
+                            });
+                            current.articles.push(article);
+                        }
                     }
                 });
+
                 if (uncategorizedNode.articles.length > 0) root.children['未分類'] = uncategorizedNode;
+                if (rootDocsNode.articles.length > 0) root.children['(ルート)'] = rootDocsNode;
+
                 return { root, allNode: allArticlesNode };
-            }, [articles]);
+            }, [articles, filterFn]);
+
             React.useEffect(() => { if (!selectedFolderNode && articles.length > 0) setSelectedFolderNode(folderTree.allNode); }, [articles, selectedFolderNode, folderTree]);
+
             const displayArticles = React.useMemo(() => {
                 let target = selectedFolderNode ? selectedFolderNode.articles : [];
                 if (onlyApproved) target = target.filter(a => a.isApproved);
                 if (onlyUnapproved) target = target.filter(a => !a.isApproved);
-                if (query) { const lower = query.toLowerCase(); target = articles.filter(a => [a.title, a.folder, stripHtml(a.contentHtml)].join(' ').toLowerCase().includes(lower)); }
+                if (query) { const lower = query.toLowerCase(); target = target.filter(a => [a.title, a.folder, stripHtml(a.contentHtml)].join(' ').toLowerCase().includes(lower)); }
                 return sortByChronology(target);
-            }, [selectedFolderNode, query, articles, onlyApproved, onlyUnapproved]);
+            }, [selectedFolderNode, query, onlyApproved, onlyUnapproved]);
+
             return (
                 <div className="flex h-full bg-slate-900 relative">
                     <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-slate-800 transition-transform transform ${showSidebar ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:flex-shrink-0 border-r border-slate-700 flex flex-col h-full`}>
                         <div className="md:hidden absolute top-2 right-2">
                             <button onClick={() => setShowSidebar(false)} className="text-slate-400 hover:text-white"><Icon name="x" size={20} /></button>
                         </div>
-                        <div className="p-3 border-b border-slate-700 bg-slate-800/50"><input className="w-full border border-slate-600 bg-slate-700 text-white placeholder-slate-400 rounded px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none" placeholder="記事を検索..." value={query} onChange={e => setQuery(e.target.value)} /></div>
+                        <div className="p-3 border-b border-slate-700 bg-slate-800/50 flex flex-col gap-2">
+                            <input className="w-full border border-slate-600 bg-slate-700 text-white placeholder-slate-400 rounded px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none" placeholder="記事を検索..." value={query} onChange={e => setQuery(e.target.value)} />
+                            <div className="flex justify-between items-center text-xs text-slate-400">
+                                <span>表示形式:</span>
+                                <div className="flex bg-slate-700 rounded p-0.5">
+                                    <button onClick={() => setLayoutStyle('list')} className={`p-1 rounded ${layoutStyle === 'list' ? 'bg-slate-500 text-white' : 'hover:text-white'}`} title="リスト"><Icon name="list" size={14} /></button>
+                                    <button onClick={() => setLayoutStyle('grid')} className={`p-1 rounded ${layoutStyle === 'grid' ? 'bg-slate-500 text-white' : 'hover:text-white'}`} title="グリッド"><Icon name="grid" size={14} /></button>
+                                </div>
+                            </div>
+                        </div>
                         <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                            {!query && <><div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition mb-1 ${selectedFolderNode?.fullPath === 'ALL' ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-slate-700 text-slate-300'}`} onClick={() => { setSelectedFolderNode(folderTree.allNode); if (window.innerWidth < 768) setShowSidebar(false); }}><Icon name="layers" size={14} className="text-indigo-400" /><span className="text-sm">すべての記事</span><span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 rounded-full ml-auto">{articles.length}</span></div><hr className="my-2 border-slate-700" />{Object.entries(folderTree.root.children).sort((a, b) => a[0].localeCompare(b[0])).map(([name, node]) => (<FolderTreeItem key={name} name={name} node={node} onSelect={(n) => { setSelectedFolderNode(n); if (window.innerWidth < 768) setShowSidebar(false); }} selectedFolder={selectedFolderNode?.fullPath} />))}</>}
+                            {!query && <>
+                                <FolderTreeItem name="すべての記事" node={folderTree.allNode} onSelect={(n) => { setSelectedFolderNode(n); if (window.innerWidth < 768) setShowSidebar(false); }} selectedFolder={selectedFolderNode?.fullPath} />
+                                <hr className="my-2 border-slate-700" />
+                                {Object.entries(folderTree.root.children).sort((a, b) => {
+                                    // 未分類と(ルート)は最後にするなどのソートロジックが必要ならここ
+                                    if (a[0] === '未分類') return 1;
+                                    if (b[0] === '未分類') return -1;
+                                    return a[0].localeCompare(b[0]);
+                                }).map(([name, node]) => (<FolderTreeItem key={name} name={name} node={node} onSelect={(n) => { setSelectedFolderNode(n); if (window.innerWidth < 768) setShowSidebar(false); }} selectedFolder={selectedFolderNode?.fullPath} />))}
+                            </>}
                         </div>
                     </div>
                     {showSidebar && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setShowSidebar(false)}></div>}
                     <button className="md:hidden fixed bottom-6 right-6 z-50 p-3 bg-indigo-600 rounded-full text-white shadow-lg flex items-center justify-center animate-bounce" onClick={() => setShowSidebar(!showSidebar)}><Icon name="menu" size={24} /></button>
                     <div className="flex-1 overflow-y-auto p-4 bg-slate-900 custom-scrollbar w-full">
-                        <div className="space-y-4">
+                        <div className={layoutStyle === 'grid' ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" : "space-y-4"}>
                             {displayArticles.map(article => (
-                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 cursor-pointer hover:border-indigo-500 hover:bg-slate-800 transition group">
-                                    <div className="flex items-center justify-between text-xs text-slate-400 mb-3"><span className={`px-2 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color}`}>{ARTICLE_TYPES[article.type]?.label}</span><span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span></div>
-                                    <h3 className="text-xl font-bold text-white group-hover:text-indigo-400 mb-3 flex items-center gap-2">
-                                        {article.isApproved && <Icon name="check-circle" size={16} className="text-emerald-400" />}
-                                        {article.title}
-                                    </h3>
-                                    <div className="text-sm text-slate-300 mb-4 leading-relaxed" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
-                                    <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{article.tags?.map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
+                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className={`bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:border-indigo-500 hover:bg-slate-800 transition group flex flex-col ${layoutStyle === 'grid' ? 'h-full' : 'p-6'}`}>
+                                    {layoutStyle === 'grid' ? (
+                                        <>
+                                            <div className="p-4 flex-1">
+                                                <div className="flex items-center justify-between text-[10px] text-slate-400 mb-2">
+                                                    <span className={`px-1.5 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-100 text-gray-800'}`}>{ARTICLE_TYPES[article.type]?.label || 'その他'}</span>
+                                                    <span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span>
+                                                </div>
+                                                <h3 className="font-bold text-white group-hover:text-indigo-400 mb-2 flex items-center gap-1 leading-snug">
+                                                    {article.isApproved && <Icon name="check-circle" size={14} className="text-emerald-400 shrink-0" />}
+                                                    <span className="truncate-2-lines">{article.title}</span>
+                                                </h3>
+                                                <div className="text-xs text-slate-400 line-clamp-3 mb-2" dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
+                                            </div>
+                                            <div className="px-4 pb-4 pt-0 mt-auto">
+                                                <div className="flex flex-wrap gap-1">{article.tags?.slice(0, 3).map(tag => <span key={tag} className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">#{tag}</span>)}</div>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <div className="flex items-center justify-between text-xs text-slate-400 mb-3"><span className={`px-2 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-100 text-gray-800'}`}>{ARTICLE_TYPES[article.type]?.label || 'その他'}</span><span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span></div>
+                                            <h3 className="text-xl font-bold text-white group-hover:text-indigo-400 mb-3 flex items-center gap-2">
+                                                {article.isApproved && <Icon name="check-circle" size={16} className="text-emerald-400" />}
+                                                {article.title}
+                                            </h3>
+                                            <div className="text-sm text-slate-300 mb-4 leading-relaxed line-clamp-3" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
+                                            <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{article.tags?.map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
+                                        </>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -2548,6 +2618,7 @@
             const [showMemberManager, setShowMemberManager] = React.useState(false);
             const [showAdminPanel, setShowAdminPanel] = React.useState(false);
             const [showRegionRuleEditor, setShowRegionRuleEditor] = React.useState(false);
+            const [showAuthModal, setShowAuthModal] = React.useState(false);
             const [myMemberData, setMyMemberData] = React.useState(null);
             const [members, setMembers] = React.useState([]);
             const [authError, setAuthError] = React.useState(null);
@@ -2661,7 +2732,7 @@
 
                 const timeoutId = setTimeout(() => {
                     const params = new URLSearchParams();
-                    params.set('world', worldId);
+                    if (worldId) params.set('world', worldId);
                     params.set('view', viewMode);
 
                     if (selectedArticle) {
@@ -2805,7 +2876,8 @@
                         const cred = await createUserWithEmailAndPassword(auth, email, authForm.password);
                         await updateProfile(cred.user, { displayName: authForm.username });
                     }
-                    setViewMode('world_select');
+                    setShowAuthModal(false);
+                    // No need to reset viewMode to world_select if we want to stay in current context
                 } catch (e) { setAuthError(e.message); }
             };
 
@@ -3207,7 +3279,11 @@
                             <div className="flex gap-2 items-center">
                                 <span className="text-xs text-gray-400 font-mono">{appContextId}</span>
                                 <button onClick={() => setShowConfigEditor(true)} className="text-xs text-gray-500 hover:text-indigo-600"><Icon name="settings" size={14} /></button>
-                                <button onClick={() => window.firebaseModules.signOut(auth)} className="text-sm text-red-500 hover:underline ml-2">ログアウト</button>
+                                {user?.isAnonymous ? (
+                                    <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="text-sm text-indigo-600 font-bold hover:underline ml-2">ログイン</button>
+                                ) : (
+                                    <button onClick={() => window.firebaseModules.signOut(auth)} className="text-sm text-red-500 hover:underline ml-2">ログアウト</button>
+                                )}
                             </div>
                         </div>
                         {showConfigEditor && <ConfigEditor currentConfig={activeConfig} currentAppId={appContextId} onSave={handleConfigSave} onCancel={() => setShowConfigEditor(false)} />}
@@ -3226,14 +3302,24 @@
                     <div className="flex-1 flex flex-col relative h-full overflow-hidden">
                         <header className="bg-white shadow-sm px-2 md:px-4 py-2 flex flex-wrap gap-2 items-center justify-between z-10 border-b shrink-0">
                             <div className="flex items-center gap-4">
+                                <button onClick={() => { setWorldId(null); setViewMode('world_select'); }} className="p-2 -ml-2 text-gray-400 hover:text-indigo-600 rounded-full hover:bg-gray-100 transition-colors" title="メニューに戻る">
+                                    <Icon name="home" size={20} />
+                                </button>
                                 <div className="hidden md:flex flex-col text-xs text-gray-500">
                                     <span className="text-sm font-bold text-gray-800">{worldData?.name}</span>
-                                    <span className="text-[11px] cursor-pointer hover:text-indigo-600" onClick={copyMyId} title="IDコピー">{user?.displayName} (ID)</span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[11px] cursor-pointer hover:text-indigo-600" onClick={copyMyId} title="IDコピー">{user?.displayName || 'Guest'} (ID)</span>
+                                        {user?.isAnonymous ? (
+                                            <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100 hover:bg-indigo-100 font-bold">ログイン</button>
+                                        ) : (
+                                            <button onClick={() => window.firebaseModules.signOut(auth)} className="text-[10px] bg-red-50 text-red-500 px-1.5 py-0.5 rounded border border-red-100 hover:bg-red-100 font-bold">ログアウト</button>
+                                        )}
+                                    </div>
                                 </div>
                                 <div className="flex-1 md:flex-none flex bg-gray-100 p-1 rounded-lg overflow-x-auto no-scrollbar min-w-0 max-w-full md:max-w-[60vw]">{VIEW_TABS.map(tab => (<button key={tab.key} onClick={() => setViewMode(tab.key)} className={`px-3 py-1.5 rounded text-sm flex items-center gap-1 whitespace-nowrap ${viewMode === tab.key ? 'bg-white shadow text-indigo-600 font-bold' : 'text-gray-500'}`}><Icon name={tab.icon} size={16} /> {tab.label}</button>))}</div>
                             </div>
                             <div className="flex items-center gap-2 md:gap-4">
-                                {(viewMode === 'timeline_large' || viewMode === 'list' || viewMode === 'map') && (
+                                {(viewMode === 'timeline_large' || viewMode === 'list' || viewMode === 'story' || viewMode === 'map') && (
                                     <button onClick={() => setTimelineFilters(prev => ({ ...prev, onlyApproved: !prev.onlyApproved, onlyUnapproved: false }))} className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${timelineFilters.onlyApproved ? 'bg-emerald-600 text-white font-bold' : 'bg-gray-200 text-gray-500 hover:bg-gray-300'}`} title="承認済み記事のみ表示">
                                         <Icon name="check-circle" size={14} />
                                         <span className="hidden sm:inline">承認済のみ</span>
@@ -3245,10 +3331,13 @@
                                     <span className="text-[10px] w-8 text-center text-gray-500 font-mono">{uiScale}%</span>
                                     <button onClick={() => setUiScale(s => Math.min(200, s + 10))} className="p-1 hover:text-indigo-600 text-gray-500" title="拡大"><Icon name="plus" size={12} /></button>
                                 </div>
-                                {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}<button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> {canIApprove ? '作成' : '参加申請'}</button></div>
+                                {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}
+                                <button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> {canIApprove ? '作成' : '参加申請'}</button>
+                            </div>
                         </header>
                         <div className={`flex-1 relative bg-slate-50 w-full ${isFixedView ? 'overflow-hidden' : 'overflow-y-auto'}`}><div style={viewMode === 'map' ? {} : scaleStyle}>
                             {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onlyUnapproved={timelineFilters.onlyUnapproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
+                            {viewMode === 'story' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'story')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onlyUnapproved={timelineFilters.onlyUnapproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} filterFn={(a) => a.type === 'story' || (a.tags && (a.tags.includes('物語') || a.tags.includes('小説') || a.tags.includes('設定書')))} />}
                             {viewMode === 'map' && <div className="absolute inset-0 flex flex-col">
                                 <div className="p-3 z-10 bg-white/90 border-b flex items-center gap-4">
                                     <input className="flex-1 p-2 rounded border text-sm max-w-sm" placeholder="地図検索 (タイトル/本文/タグ)..." value={mapTabQuery || ''} onChange={e => setMapTabQuery(e.target.value)} />
@@ -3567,6 +3656,35 @@
                                 </div>
                             )}
                             {showMemberManager && <MemberManager db={db} worldId={worldId} appContextId={appContextId} onClose={() => setShowMemberManager(false)} members={members} onAddMember={handleAddMember} />}
+                            {showAuthModal && (
+                                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[10000] p-4 backdrop-blur-sm">
+                                    <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm animate-[fadeIn_0.2s_ease-out] relative">
+                                        <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><Icon name="x" size={20} /></button>
+                                        <div className="text-center mb-6">
+                                            <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="user" size={32} /></div>
+                                            <h3 className="text-xl font-bold text-gray-900">{authMode === 'login' ? 'ログイン' : '新規登録'}</h3>
+                                            <p className="text-sm text-gray-500 mt-1">{authMode === 'login' ? 'アカウントにログインしてください' : '新しいアカウントを作成します'}</p>
+                                        </div>
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">ユーザー名</label>
+                                                <input className="w-full border-2 border-gray-100 p-3 rounded-xl mt-1 focus:border-indigo-500 outline-none transition-colors" placeholder="Username" value={authForm.username} onChange={e => setAuthForm({ ...authForm, username: e.target.value })} />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">パスワード</label>
+                                                <input className="w-full border-2 border-gray-100 p-3 rounded-xl mt-1 focus:border-indigo-500 outline-none transition-colors" type="password" placeholder="Password" value={authForm.password} onChange={e => setAuthForm({ ...authForm, password: e.target.value })} />
+                                            </div>
+                                            {authError && <div className="text-xs text-red-500 bg-red-50 p-2 rounded-lg border border-red-100">{authError}</div>}
+                                            <button onClick={handleAuth} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-[0.98] mt-2">{authMode === 'login' ? 'ログイン' : '作成'}</button>
+                                            <div className="text-center pt-4 border-t border-gray-50">
+                                                <button onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError(null); }} className="text-sm text-indigo-600 font-bold hover:underline">
+                                                    {authMode === 'login' ? 'アカウントをお持ちでない方はこちら' : '既にアカウントをお持ちの方はこちら'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                             {showRegionRuleEditor && <RegionRuleEditor rules={regionRules} worldData={worldData} onSave={(r) => { handleSaveRegionRules(r); setShowRegionRuleEditor(false); }} onClose={() => setShowRegionRuleEditor(false)} />}
                             {showAdminPanel && (
                                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
