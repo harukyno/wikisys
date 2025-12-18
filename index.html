@@ -1581,7 +1581,7 @@
                     </div>
                     {showSidebar && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setShowSidebar(false)}></div>}
                     <button className="md:hidden fixed bottom-6 right-6 z-50 p-3 bg-indigo-600 rounded-full text-white shadow-lg flex items-center justify-center animate-bounce" onClick={() => setShowSidebar(!showSidebar)}><Icon name="menu" size={24} /></button>
-                    <div className="flex-1 overflow-y-auto p-4 bg-slate-900 custom-scrollbar">
+                    <div className="flex-1 overflow-y-auto p-4 bg-slate-900 custom-scrollbar w-full">
                         <div className="space-y-4">
                             {displayArticles.map(article => (
                                 <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 cursor-pointer hover:border-indigo-500 hover:bg-slate-800 transition group">
@@ -3215,7 +3215,7 @@
                                 </div>
                                 {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}<button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> {canIApprove ? '作成' : '作成申請'}</button></div>
                         </header>
-                        <div className="flex-1 overflow-y-auto relative bg-slate-50" style={{ zoom: uiScale / 100, scrollbarGutter: 'stable' }}>
+                        <div className="flex-1 overflow-y-auto relative bg-slate-50" style={{ zoom: uiScale / 100 }}>
                             {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
                             {viewMode === 'map' && <div className="absolute inset-0 flex flex-col">
                                 <div className="p-3 z-10 bg-white/90 border-b flex items-center gap-4">
