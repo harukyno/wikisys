@@ -257,6 +257,16 @@
             other: { label: 'その他', color: 'bg-gray-100 text-gray-800', icon: 'box' }
         };
 
+        // 重要度ごとのスタイル定義
+        const getImportanceClass = (imp) => {
+            const v = Number(imp) || 3;
+            if (v >= 5) return 'bg-yellow-900/40 border-yellow-500/50 text-yellow-100';
+            if (v === 4) return 'bg-purple-900/40 border-purple-500/50 text-purple-100';
+            if (v === 3) return 'bg-blue-900/40 border-blue-500/50 text-blue-100';
+            if (v === 2) return 'bg-slate-800/60 border-slate-600/50 text-slate-300';
+            return 'bg-gray-800/60 border-gray-700/50 text-gray-400';
+        };
+
         // ビュー設定：構造年表（Large Timeline）をメインの年表として統合
         const VIEW_TABS = [
             { key: 'list', label: '総記', icon: 'list' },
@@ -2276,9 +2286,24 @@
                             </div>
                         )}
 
-                        {viewMode === 'detailed' && (
-                            <div className="w-12 bg-slate-950 border-r border-white/10 hidden md:block timeline-ruler z-10 sticky top-0 h-full"><div className="absolute top-1/2 w-full text-center text-[10px] text-indigo-400 font-bold bg-slate-900 py-1 border-y border-indigo-500/30 transform -translate-y-1/2">{activeArticle ? getArticleYear(activeArticle) : '???'}</div></div>
-                        )}
+                        {viewMode === 'detailed' && (() => {
+                            const yearVal = activeArticle ? getArticleYear(activeArticle) : 0;
+                            const isBC = yearVal < 0;
+                            const rulerClass = isBC
+                                ? "bg-red-950 border-r border-red-900/30"
+                                : "bg-slate-950 border-r border-white/10";
+                            const labelBg = isBC ? "bg-red-900" : "bg-slate-900";
+                            const labelText = isBC ? "text-red-200" : "text-indigo-400";
+                            const labelBorder = isBC ? "border-red-500/50" : "border-indigo-500/30";
+
+                            return (
+                                <div className={`w-12 hidden md:block timeline-ruler z-10 sticky top-0 h-full ${rulerClass}`}>
+                                    <div className={`absolute top-1/2 w-full text-center text-[10px] font-bold py-1 border-y transform -translate-y-1/2 ${labelBg} ${labelText} ${labelBorder}`}>
+                                        {activeArticle ? Math.floor(yearVal) : '???'}
+                                    </div>
+                                </div>
+                            );
+                        })()}
 
                         <div ref={containerRef} className={`flex-1 overflow-y-auto scroll-smooth relative ${viewMode === 'detailed' ? 'p-4 md:p-10' : 'p-6'}`} onScroll={handleScroll}>
                             {viewMode === 'detailed' && <div className="absolute left-8 top-0 bottom-0 w-px bg-white/10 z-0 md:left-20"></div>}
@@ -2367,6 +2392,43 @@
                                                             <div className="hidden md:block w-12 h-px bg-white/30 shrink-0"></div>
                                                             <div className="w-full md:w-[320px] shrink-0 pl-0 md:pl-0 border-l-0 md:border-l border-white/30 py-4 relative">
                                                                 <div className="hidden md:block absolute left-[-1px] top-1/2 w-2 h-2 bg-white rounded-full -translate-y-1/2 -translate-x-1/2 shadow-[0_0_10px_white]"></div>
+
+                                                                {/* 関連する記事 (Related Articles) */}
+                                                                {(() => {
+                                                                    const related = React.useMemo(() => {
+                                                                        const keywords = extractLinkedKeywords(article.contentHtml);
+                                                                        // Outgoing
+                                                                        const outgoing = allArticles.filter(a => keywords.includes(a.title) || keywords.includes(a.id));
+                                                                        // Incoming (Backlinks)
+                                                                        const incoming = allArticles.filter(a => {
+                                                                            const k = extractLinkedKeywords(a.contentHtml);
+                                                                            return k.includes(article.title) || k.includes(article.id);
+                                                                        });
+                                                                        // Merge & Dedup
+                                                                        const combined = [...outgoing, ...incoming].filter((v, i, arr) => arr.findIndex(t => t.id === v.id) === i && v.id !== article.id);
+                                                                        return sortByChronology(combined);
+                                                                    }, [article, allArticles]);
+
+                                                                    if (related.length === 0) return null;
+
+                                                                    return (
+                                                                        <div className="mb-6 pl-8">
+                                                                            <div className="mb-2 flex items-center gap-2 text-white/60 text-xs font-bold uppercase tracking-widest">関連する記事 ({related.length})</div>
+                                                                            <div className="flex flex-col gap-2 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                                                                                {related.map(r => (
+                                                                                    <div key={r.id} className={`p-2 rounded border cursor-pointer hover:brightness-125 transition ${getImportanceClass(r.importance)}`} onClick={() => handleJump(r)}>
+                                                                                        <div className="flex justify-between items-start">
+                                                                                            <span className="text-xs font-bold truncate">{r.title}</span>
+                                                                                            <span className="text-[10px] opacity-70 whitespace-nowrap ml-2">{getArticleYear(r)}年</span>
+                                                                                        </div>
+                                                                                        <div className="text-[10px] opacity-60 truncate mt-0.5">{ARTICLE_TYPES[r.type]?.label || 'その他'}</div>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })()}
+
                                                                 <div className="mb-2 flex items-center gap-2 text-white/60 text-xs font-bold uppercase tracking-widest pl-8">関連マインドマップ</div>
                                                                 <TagTimelineColumns tags={article.tags} articles={allArticles} onSelectArticle={(item) => handleJump(item)} onTagClick={(t) => { isJumpingRef.current = true; if (onSearchChange) onSearchChange({ tag: t }); }} selectedArticleId={article.id} isTreeMode={true} variant="light" />
                                                                 {article.stats && article.stats.length > 0 && (
