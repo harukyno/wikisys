@@ -301,6 +301,23 @@
 
         const stripHtml = (html = '') => html.replace(/<[^>]*>/g, ' ');
 
+        const escapeHtml = (str) => {
+            if (!str) return '';
+            return str.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+        };
+
+        const applyRuby = (str) => {
+            if (!str) return '';
+            let s = str;
+            // Explicit Ruby |Kanji《Furi》 or ｜Kanji《Furi》
+            s = s.replace(/[\|｜]([^《]+)《([^》]+)》/g, '<ruby>$1<rt>$2</rt></ruby>');
+            // Auto Kanji Ruby Kanji《Furi》
+            s = s.replace(/([一-龠々〆ヵヶ]+)《([^》]+)》/g, '<ruby>$1<rt>$2</rt></ruby>');
+            // Safe Ruby ruby{Kanji|Furi}
+            s = s.replace(/ruby\{([^}|]+)\|([^}]+)\}/g, '<ruby>$1<rt>$2</rt></ruby>');
+            return s;
+        };
+
         // 年代抽出ユーティリティ
         const parseYear = (val) => {
             if (!val) return 0;
@@ -560,22 +577,7 @@
                 return cells;
             };
 
-            const escapeHtml = (str) => {
-                if (!str) return '';
-                return str.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-            };
 
-            const applyRuby = (str) => {
-                if (!str) return '';
-                let s = str;
-                // Explicit Ruby |Kanji《Furi》 or ｜Kanji《Furi》
-                s = s.replace(/[\|｜]([^《]+)《([^》]+)》/g, '<ruby>$1<rt>$2</rt></ruby>');
-                // Auto Kanji Ruby Kanji《Furi》
-                s = s.replace(/([一-龠々〆ヵヶ]+)《([^》]+)》/g, '<ruby>$1<rt>$2</rt></ruby>');
-                // Safe Ruby ruby{Kanji|Furi}
-                s = s.replace(/ruby\{([^}|]+)\|([^}]+)\}/g, '<ruby>$1<rt>$2</rt></ruby>');
-                return s;
-            };
 
             const processInline = (str) => {
                 let s = str;
