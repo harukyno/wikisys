@@ -1499,7 +1499,7 @@
             );
         };
 
-        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange, onlyApproved = false }) => {
+        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange, onlyApproved = false, onlyUnapproved = false }) => {
             const [selectedFolderNode, setSelectedFolderNode] = React.useState(null);
             const [query, setQuery] = React.useState('');
             const [showSidebar, setShowSidebar] = React.useState(false);
@@ -1565,9 +1565,10 @@
             const displayArticles = React.useMemo(() => {
                 let target = selectedFolderNode ? selectedFolderNode.articles : [];
                 if (onlyApproved) target = target.filter(a => a.isApproved);
+                if (onlyUnapproved) target = target.filter(a => !a.isApproved);
                 if (query) { const lower = query.toLowerCase(); target = articles.filter(a => [a.title, a.folder, stripHtml(a.contentHtml)].join(' ').toLowerCase().includes(lower)); }
                 return sortByChronology(target);
-            }, [selectedFolderNode, query, articles, onlyApproved]);
+            }, [selectedFolderNode, query, articles, onlyApproved, onlyUnapproved]);
             return (
                 <div className="flex h-full bg-slate-900 relative">
                     <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-slate-800 transition-transform transform ${showSidebar ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:flex-shrink-0 border-r border-slate-700 flex flex-col h-full`}>
@@ -3209,7 +3210,7 @@
                             </div>
                             <div className="flex items-center gap-2 md:gap-4">
                                 {(viewMode === 'timeline_large' || viewMode === 'list' || viewMode === 'map') && (
-                                    <button onClick={() => setTimelineFilters(prev => ({ ...prev, onlyApproved: !prev.onlyApproved }))} className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${timelineFilters.onlyApproved ? 'bg-emerald-600 text-white font-bold' : 'bg-gray-200 text-gray-500 hover:bg-gray-300'}`} title="承認済み記事のみ表示">
+                                    <button onClick={() => setTimelineFilters(prev => ({ ...prev, onlyApproved: !prev.onlyApproved, onlyUnapproved: false }))} className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${timelineFilters.onlyApproved ? 'bg-emerald-600 text-white font-bold' : 'bg-gray-200 text-gray-500 hover:bg-gray-300'}`} title="承認済み記事のみ表示">
                                         <Icon name="check-circle" size={14} />
                                         <span className="hidden sm:inline">承認済のみ</span>
                                     </button>
@@ -3223,7 +3224,7 @@
                                 {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}<button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> {canIApprove ? '作成' : '作成申請'}</button></div>
                         </header>
                         <div className="flex-1 overflow-y-auto relative bg-slate-50 w-full"><div style={viewMode === 'map' ? {} : scaleStyle}>
-                            {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
+                            {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onlyUnapproved={timelineFilters.onlyUnapproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
                             {viewMode === 'map' && <div className="absolute inset-0 flex flex-col">
                                 <div className="p-3 z-10 bg-white/90 border-b flex items-center gap-4">
                                     <input className="flex-1 p-2 rounded border text-sm max-w-sm" placeholder="地図検索 (タイトル/本文/タグ)..." value={mapTabQuery || ''} onChange={e => setMapTabQuery(e.target.value)} />
@@ -3530,6 +3531,17 @@
                                             <button onClick={() => setShowAdminPanel(false)} className="text-gray-500"><Icon name="x" size={18} /></button>
                                         </div>
                                         <div className="space-y-4">
+                                            <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 p-3 rounded">
+                                                <div>
+                                                    <div className="text-sm font-bold text-yellow-800">未承認の記事</div>
+                                                    <div className="text-xs text-yellow-600">承認待ち: {articles.filter(a => !a.isApproved).length}件</div>
+                                                </div>
+                                                <button onClick={() => {
+                                                    setTimelineFilters(prev => ({ ...prev, onlyUnapproved: true, onlyApproved: false }));
+                                                    setViewMode('list');
+                                                    setShowAdminPanel(false);
+                                                }} className="px-3 py-1.5 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700">確認する</button>
+                                            </div>
                                             <div className="flex items-center justify-between">
                                                 <div>
                                                     <div className="text-sm font-bold">メンバー管理</div>
