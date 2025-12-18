@@ -2560,11 +2560,13 @@
             // Expose setViewMode to window for deep component access (hacky but effective for current structure)
             React.useEffect(() => { window.setAppViewMode = setViewMode; return () => delete window.setAppViewMode; }, []);
 
+            const isFixedView = ['timeline_large', 'list', 'map'].includes(viewMode);
             const scaleStyle = {
                 transform: `scale(${uiScale / 100})`,
                 transformOrigin: 'top left',
                 width: `${100 * 100 / uiScale}%`,
-                minHeight: '100%'
+                height: isFixedView ? `${100 * 100 / uiScale}%` : 'auto',
+                minHeight: isFixedView ? '0' : `${100 * 100 / uiScale}%`
             };
 
             // これにより、エディタの参照を保持
@@ -3227,7 +3229,7 @@
                                 </div>
                                 {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}<button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> {canIApprove ? '作成' : '作成申請'}</button></div>
                         </header>
-                        <div className="flex-1 overflow-y-auto relative bg-slate-50 w-full"><div style={viewMode === 'map' ? {} : scaleStyle}>
+                        <div className={`flex-1 relative bg-slate-50 w-full ${isFixedView ? 'overflow-hidden' : 'overflow-y-auto'}`}><div style={viewMode === 'map' ? {} : scaleStyle}>
                             {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onlyUnapproved={timelineFilters.onlyUnapproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
                             {viewMode === 'map' && <div className="absolute inset-0 flex flex-col">
                                 <div className="p-3 z-10 bg-white/90 border-b flex items-center gap-4">
