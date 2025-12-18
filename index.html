@@ -3228,7 +3228,7 @@
                                     <span className="text-[10px] w-8 text-center text-gray-500 font-mono">{uiScale}%</span>
                                     <button onClick={() => setUiScale(s => Math.min(200, s + 10))} className="p-1 hover:text-indigo-600 text-gray-500" title="拡大"><Icon name="plus" size={12} /></button>
                                 </div>
-                                {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}<button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> {canIApprove ? '作成' : '作成申請'}</button></div>
+                                {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}<button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> {canIApprove ? '作成' : '参加申請'}</button></div>
                         </header>
                         <div className={`flex-1 relative bg-slate-50 w-full ${isFixedView ? 'overflow-hidden' : 'overflow-y-auto'}`}><div style={viewMode === 'map' ? {} : scaleStyle}>
                             {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onlyUnapproved={timelineFilters.onlyUnapproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
@@ -3378,11 +3378,11 @@
                                             </button>
                                         </div>
                                     </div>
-                                    <div className="flex-1 flex overflow-hidden">
-                                        <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-4">
-                                            <input className="w-full text-3xl font-bold p-2 border-b outline-none serif" placeholder="タイトル" value={formData.title} onChange={e => setFormData(prev => ({ ...prev, title: e.target.value }))} />
-                                            <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (開始) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/01/01-00:00:00" value={formData.period?.start || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), start: e.target.value } }))} /></div><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (終了) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/12/31-23:59:59" value={formData.period?.end || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), end: e.target.value } }))} /></div></div>
-                                            <div className="grid grid-cols-3 gap-4">
+                                    <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+                                        <div className="flex-1 p-4 md:p-6 overflow-y-auto flex flex-col gap-4">
+                                            <input className="w-full text-xl md:text-3xl font-bold p-2 border-b outline-none serif" placeholder="タイトル" value={formData.title} onChange={e => setFormData(prev => ({ ...prev, title: e.target.value }))} />
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (開始) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/01/01-00:00:00" value={formData.period?.start || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), start: e.target.value } }))} /></div><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (終了) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/12/31-23:59:59" value={formData.period?.end || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), end: e.target.value } }))} /></div></div>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                                 <div>
                                                     <label className="text-xs font-bold text-gray-500 block mb-1">種別</label>
                                                     <select className="w-full border p-2 rounded" value={formData.type} onChange={e => setFormData(prev => ({ ...prev, type: e.target.value }))}>
@@ -3423,9 +3423,9 @@
                                                     (承認権限がありません)
                                                 </div>
                                             )}
-                                            <div className="flex gap-2">
+                                            <div className="flex flex-col md:flex-row gap-2">
                                                 <div className="flex-1"><LocationsEditor locations={formData.locations} onChange={l => setFormData(prev => ({ ...prev, locations: l }))} /></div>
-                                                <div className="w-1/3 space-y-2">
+                                                <div className="w-full md:w-1/3 space-y-2">
                                                     <ArticleLinkInserter articles={articles} onInsert={(a) => {
                                                         if (formData._editorMode === 'html' && htmlTextareaRef.current) {
                                                             const ta = htmlTextareaRef.current;
@@ -3506,7 +3506,7 @@
                                                 </>}
                                             </div>
                                         </div>
-                                        <div className="w-80 border-l bg-gray-50 flex flex-col overflow-y-auto">
+                                        <div className="w-full lg:w-80 h-72 lg:h-auto border-t lg:border-t-0 lg:border-l bg-gray-50 flex flex-col overflow-y-auto shrink-0">
                                             <div className="h-52 relative border-b">
                                                 <MapView
                                                     articles={previewArticles}
