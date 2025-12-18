@@ -2674,8 +2674,9 @@
                     }
 
                     // 年代なしフィルタ状態もURLに含める
-                    if (timelineFilters.excludeNoYear !== undefined) {
-                        params.set('excludeNoYear', timelineFilters.excludeNoYear.toString());
+                    // 年代なしフィルタ状態もURLに含める (デフォルトtrueの場合は省略)
+                    if (timelineFilters.excludeNoYear === false) {
+                        params.set('excludeNoYear', 'false');
                     }
 
                     if (viewMode === 'map' && mapTabQuery) {
