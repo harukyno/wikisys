@@ -810,31 +810,14 @@
         };
 
         // --- Member Manager ---
-        const MemberManager = ({ db, worldId, appContextId, onClose }) => {
-            const [members, setMembers] = React.useState([]);
+        const MemberManager = ({ db, worldId, appContextId, onClose, members = [], onAddMember }) => {
             const [inviteId, setInviteId] = React.useState('');
             const [loading, setLoading] = React.useState(false);
 
-            React.useEffect(() => {
-                const { collection, onSnapshot } = window.firebaseModules;
-                return onSnapshot(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members'), s => {
-                    setMembers(s.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
-            }, [db, worldId, appContextId]);
-
             const addMember = async () => {
                 if (!inviteId.trim()) return;
-                const name = prompt("メンバーの表示名を入力してください (任意)", "");
-                setLoading(true);
-                try {
-                    const { doc, setDoc, serverTimestamp } = window.firebaseModules;
-                    await setDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', inviteId.trim()), {
-                        role: 'editor', username: name || '', addedAt: serverTimestamp()
-                    });
-                    setInviteId('');
-                    alert('メンバーを追加しました');
-                } catch (e) { alert('追加エラー: ' + e.message); }
-                setLoading(false);
+                await onAddMember(inviteId.trim());
+                setInviteId('');
             };
 
             const updateMemberName = async (member) => {
@@ -1947,7 +1930,7 @@
         );
 
         // --- LargeTimelineView (構造年表: 統合版) ---
-        const LargeTimelineView = ({ articles = [], onSelectArticle, onEditArticle, onDeleteArticle, onDuplicateArticle, focusedArticle, onFocusChange, allArticles = [], searchState, onSearchChange, onResetFilters, worldData, appContextId, myRole, onOpenNoYear, onOpenTagArticle, tagArticleValue, onTagArticleValueChange }) => {
+        const LargeTimelineView = ({ articles = [], onSelectArticle, onEditArticle, onDeleteArticle, onDuplicateArticle, focusedArticle, onFocusChange, allArticles = [], searchState, onSearchChange, onResetFilters, worldData, appContextId, myRole, onOpenNoYear, onOpenTagArticle, tagArticleValue, onTagArticleValueChange, members = [], onAddMember }) => {
             const [showSearch, setShowSearch] = React.useState(false);
             const [centeredArticleId, setCenteredArticleId] = React.useState(null);
             const [viewMode, setViewMode] = React.useState('broad'); // 'broad' (title only) or 'detailed'
@@ -2059,12 +2042,16 @@
             const handleScroll = () => {
                 if (isJumpingRef.current || !containerRef.current || viewMode === 'broad') return;
                 const container = containerRef.current;
-                const center = container.scrollTop + container.clientHeight / 2;
+                const containerRect = container.getBoundingClientRect();
+                const centerY = containerRect.top + containerRect.height / 2;
+
                 let closest = null, minDst = Infinity;
                 sortedArticles.forEach(a => {
                     const el = articleRefs.current.get(a.id);
                     if (el) {
-                        const dst = Math.abs((el.offsetTop + el.offsetHeight / 2) - center);
+                        const elRect = el.getBoundingClientRect();
+                        const elCenterY = elRect.top + elRect.height / 2;
+                        const dst = Math.abs(elCenterY - centerY);
                         if (dst < minDst) { minDst = dst; closest = a; }
                     }
                 });
@@ -2128,7 +2115,14 @@
                                                 <div className="text-[10px] text-white/60">{a.dateStr || ''}</div>
                                             </div>
                                             <div className="text-xs text-white/60 mt-2 line-clamp-2" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: highlightHtml(transformContent(a.contentHtml || ''), searchState.keyword) }}></div>
-                                            {(myRole === 'owner' || myRole === 'admin') && a.createdBy && <div onClick={(e) => { e.stopPropagation(); copyText(a.createdBy); }} className="text-[10px] text-white/30 mt-2 cursor-pointer hover:text-white truncate" title="作成者UIDをコピー">UID: {a.createdBy}</div>}
+                                            {(myRole === 'owner' || myRole === 'admin') && a.createdBy && (
+                                                <div className="mt-2 flex items-center justify-between">
+                                                    <div onClick={(e) => { e.stopPropagation(); copyText(a.createdBy); }} className="text-[10px] text-white/30 cursor-pointer hover:text-white truncate" title="作成者UIDをコピー">UID: {a.createdBy.slice(0, 6)}...</div>
+                                                    {!members.some(m => m.id === a.createdBy) && (
+                                                        <button onClick={(e) => { e.stopPropagation(); onAddMember && onAddMember(a.createdBy, a.title + " 作者"); }} className="text-[10px] bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded hover:bg-emerald-600/40">メンバ追加</button>
+                                                    )}
+                                                </div>
+                                            )}
                                             <div className="mt-3 flex gap-2 justify-end">
                                                 <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => {
                                                     e.stopPropagation();
@@ -2211,7 +2205,14 @@
                                                                 <div className="absolute right-4 bottom-4 text-white/20"><Icon name={ARTICLE_TYPES[article.type]?.icon} size={80} /></div>
                                                                 <div className="absolute top-2 right-2 flex flex-col gap-1 items-end">
                                                                     <button onClick={(e) => { e.stopPropagation(); copyText(article.id); }} className="text-white/50 hover:text-white bg-black/20 px-2 py-1 rounded text-xs">ID: {article.id.slice(0, 4)}...</button>
-                                                                    {(myRole === 'owner' || myRole === 'admin') && article.createdBy && <button onClick={(e) => { e.stopPropagation(); copyText(article.createdBy); }} className="text-white/30 hover:text-white bg-black/20 px-2 py-1 rounded text-[10px]" title="作成者UIDをコピー">UID: {article.createdBy.slice(0, 4)}...</button>}
+                                                                    {(myRole === 'owner' || myRole === 'admin') && article.createdBy && (
+                                                                        <div className="flex flex-col items-end gap-1">
+                                                                            <button onClick={(e) => { e.stopPropagation(); copyText(article.createdBy); }} className="text-white/30 hover:text-white bg-black/20 px-2 py-1 rounded text-[10px]" title="作成者UIDをコピー">UID: {article.createdBy.slice(0, 8)}...</button>
+                                                                            {!members.some(m => m.id === article.createdBy) && (
+                                                                                <button onClick={(e) => { e.stopPropagation(); onAddMember && onAddMember(article.createdBy, article.title + " 作者"); }} className="text-[10px] bg-emerald-600/40 text-emerald-200 border border-emerald-500/30 px-2 py-0.5 rounded hover:bg-emerald-600/60 transition">メンバーに追加</button>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                             <div className="p-6">
@@ -2548,6 +2549,7 @@
             const [showAdminPanel, setShowAdminPanel] = React.useState(false);
             const [showRegionRuleEditor, setShowRegionRuleEditor] = React.useState(false);
             const [myMemberData, setMyMemberData] = React.useState(null);
+            const [members, setMembers] = React.useState([]);
             const [authError, setAuthError] = React.useState(null);
             const [timelineFilters, setTimelineFilters] = React.useState({ type: 'all', keyword: '', tag: '', excludeNoYear: true, onlyApproved: false });
 
@@ -2731,7 +2733,10 @@
                 const unsubArticles = onSnapshot(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles'), s => {
                     setArticles(s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => getArticleYear(a) - getArticleYear(b)));
                 });
-                return () => { unsubWorld(); unsubArticles(); };
+                const unsubMembers = onSnapshot(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members'), s => {
+                    setMembers(s.docs.map(d => ({ ...d.data(), id: d.id })));
+                });
+                return () => { unsubWorld(); unsubArticles(); unsubMembers(); };
             }, [db, worldId, appContextId]);
 
             React.useEffect(() => {
@@ -2755,7 +2760,7 @@
             }, [db, worldId, user, appContextId]);
 
             const myRole = myMemberData?.role || 'guest';
-            const canIApprove = myRole === 'owner' || myMemberData?.canApprove === true;
+            const canIApprove = myRole === 'owner' || myRole === 'admin' || myMemberData?.canApprove === true;
 
             const articleIndex = React.useMemo(() => { const map = new Map(); articles.forEach(a => map.set(a.id, a)); return map; }, [articles]);
             // previewArticles: merge current formData into articles for instant preview in edit mode
@@ -2970,6 +2975,18 @@
                 } catch (e) { alert("ルール保存失敗: " + e.message); }
             };
 
+            const handleAddMember = async (uid, defaultName = "") => {
+                if (!uid) return;
+                const { doc, setDoc, serverTimestamp } = window.firebaseModules;
+                const name = prompt("メンバーの表示名を入力してください", defaultName);
+                if (name === null) return;
+                try {
+                    await setDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', uid.trim()), {
+                        role: 'editor', username: name || '', joinedAt: serverTimestamp()
+                    });
+                    alert('メンバーを追加しました');
+                } catch (e) { alert('追加エラー: ' + e.message); }
+            };
             const handleReapplyRegionTags = async () => {
                 if (!confirm('現在の全記事に対して、地域タグ・ルールを再適用しますか？\n\n・ルールに合致するタグが自動追加されます\n・場所が範囲外になった地域タグは自動削除されます\n・手動タグは維持されます')) return;
                 const { updateDoc, doc } = window.firebaseModules;
@@ -3117,7 +3134,7 @@
             const copyMyId = () => {
                 if (!user) return;
                 const text = user.uid;
-                const fallbackCopy = (text) => { const textArea = document.createElement("textarea"); textArea.value = text; textArea.style.position = "fixed"; textArea.style.left = "-9999px"; document.body.appendChild(textArea); textArea.focus(); textArea.select(); try { document.execCommand('copy'); alert("IDコピー: " + text); } catch (err) { console.error(err); alert("失敗"); } document.body.removeChild(textArea); };
+                const fallbackCopy = (text) => { const textArea = document.createElement("textarea"); textArea.value = text; textArea.style.position = "fixed"; textArea.style.left = "-9999px"; textArea.style.top = "0"; document.body.appendChild(textArea); textArea.focus(); textArea.select(); try { document.execCommand('copy'); alert("IDコピー: " + text); } catch (err) { console.error(err); alert("失敗"); } document.body.removeChild(textArea); };
                 if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(() => alert("IDコピー: " + text)).catch(() => fallbackCopy(text)); } else { fallbackCopy(text); }
             };
 
@@ -3263,7 +3280,28 @@
                                     }
                                 }} appContextId={appContextId} /></div>
                             </div>}
-                            {viewMode === 'timeline_large' && <LargeTimelineView articles={filteredTimelineArticles} onSelectArticle={setSelectedArticle} onEditArticle={startEditingArticle} onDeleteArticle={handleDeleteArticle} onDuplicateArticle={handleDuplicateArticle} focusedArticle={selectedArticle} onFocusChange={setSelectedArticle} allArticles={articles} searchState={timelineFilters} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true })} worldData={worldData} appContextId={appContextId} myRole={myRole} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { setSelectedArticle(art); setViewMode('single_article'); } } else { setViewMode('timeline_noyear'); } }} onOpenTagArticle={openTagArticle} tagArticleValue={tagArticleInput} onTagArticleValueChange={setTagArticleInput} />}
+                            {viewMode === 'timeline_large' && <LargeTimelineView
+                                articles={filteredTimelineArticles}
+                                onSelectArticle={setSelectedArticle}
+                                onEditArticle={startEditingArticle}
+                                onDeleteArticle={handleDeleteArticle}
+                                onDuplicateArticle={handleDuplicateArticle}
+                                focusedArticle={selectedArticle}
+                                onFocusChange={setSelectedArticle}
+                                allArticles={articles}
+                                searchState={timelineFilters}
+                                onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))}
+                                onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true, onlyApproved: false })}
+                                worldData={worldData}
+                                appContextId={appContextId}
+                                myRole={myRole}
+                                onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { setSelectedArticle(art); setViewMode('single_article'); } } else { setViewMode('timeline_noyear'); } }}
+                                onOpenTagArticle={openTagArticle}
+                                tagArticleValue={tagArticleInput}
+                                onTagArticleValueChange={setTagArticleInput}
+                                members={members}
+                                onAddMember={handleAddMember}
+                            />}
                             {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} />}
                             {viewMode === 'timeline_noyear' && (
                                 <div className="absolute inset-0 overflow-auto p-6 bg-slate-900">
@@ -3528,7 +3566,7 @@
                                     </div>
                                 </div>
                             )}
-                            {showMemberManager && <MemberManager db={db} worldId={worldId} appContextId={appContextId} onClose={() => setShowMemberManager(false)} />}
+                            {showMemberManager && <MemberManager db={db} worldId={worldId} appContextId={appContextId} onClose={() => setShowMemberManager(false)} members={members} onAddMember={handleAddMember} />}
                             {showRegionRuleEditor && <RegionRuleEditor rules={regionRules} worldData={worldData} onSave={(r) => { handleSaveRegionRules(r); setShowRegionRuleEditor(false); }} onClose={() => setShowRegionRuleEditor(false)} />}
                             {showAdminPanel && (
                                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
@@ -3540,8 +3578,8 @@
                                         <div className="space-y-4">
                                             <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 p-3 rounded">
                                                 <div>
-                                                    <div className="text-sm font-bold text-yellow-800">未承認の記事</div>
-                                                    <div className="text-xs text-yellow-600">承認待ち: {articles.filter(a => !a.isApproved).length}件</div>
+                                                    <div className="text-sm font-bold text-yellow-800">未承認の記事 (申請)</div>
+                                                    <div className="text-xs text-yellow-600">承認待ち: {articles.filter(a => !a.isApproved).length}件 / 著者をメンバーに招待できます。</div>
                                                 </div>
                                                 <button onClick={() => {
                                                     setTimelineFilters(prev => ({ ...prev, onlyUnapproved: true, onlyApproved: false }));
