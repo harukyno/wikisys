@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WorldWeaver - 次世代創作Wiki</title>
 
     <!-- React & ReactDOM -->
@@ -37,13 +37,13 @@
     <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp, deleteApp, getApps } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, query, where, getDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 
         window.firebaseModules = {
             initializeApp, deleteApp, getApps,
-            getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile, setPersistence, browserLocalPersistence,
+            getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile,
             getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, query, where, getDoc,
             getStorage, ref, uploadBytes, getDownloadURL
         };
@@ -253,14 +253,12 @@
             organization: { label: '組織', color: 'bg-purple-100 text-purple-800', icon: 'building' },
             ideology: { label: '思想・宗教', color: 'bg-emerald-100 text-emerald-800', icon: 'star' },
             item: { label: '物品', color: 'bg-amber-100 text-amber-800', icon: 'package' },
-            story: { label: '物語', color: 'bg-pink-100 text-pink-800', icon: 'book-open' },
             other: { label: 'その他', color: 'bg-gray-100 text-gray-800', icon: 'box' }
         };
 
         // ビュー設定：構造年表（Large Timeline）をメインの年表として統合
         const VIEW_TABS = [
-            { key: 'list', label: '総記', icon: 'list' },
-            { key: 'story', label: '物語', icon: 'book' },
+            { key: 'list', label: '一覧', icon: 'list' },
             { key: 'map', label: '地図', icon: 'map' },
             { key: 'timeline_large', label: '構造年表', icon: 'git-branch' },
             { key: 'stats', label: '統計', icon: 'bar-chart-2' }
@@ -294,7 +292,6 @@
             locationArticleId: '',
             mainImageUrl: ''
             , noYear: false
-            , importance: 3 // 重要度 (1-5)
             , attachments: [] // { name, url }
             , _editorMode: 'wysiwyg' // default editor view
         });
@@ -343,7 +340,6 @@
             const keyword = (filters.keyword || '').trim().toLowerCase();
             const tag = (filters.tag || '').replace(/^#/, '').trim().toLowerCase();
             const type = (filters.type || 'all');
-            const minImportance = Number(filters.minImportance) || 0;
             return sortByChronology(articles).filter(article => {
                 if (filters.excludeNoYear) {
                     const y = getArticleYear(article);
@@ -351,7 +347,6 @@
                 }
                 if (filters.onlyApproved && !article.isApproved) return false;
                 if (type !== 'all' && article.type !== type) return false;
-                if (minImportance > 0 && (article.importance || 3) < minImportance) return false;
                 if (keyword) {
                     const haystack = [
                         article.title,
@@ -560,23 +555,6 @@
                 return cells;
             };
 
-            const escapeHtml = (str) => {
-                if (!str) return '';
-                return str.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-            };
-
-            const applyRuby = (str) => {
-                if (!str) return '';
-                let s = str;
-                // Explicit Ruby |Kanji《Furi》 or ｜Kanji《Furi》
-                s = s.replace(/[\|｜]([^《]+)《([^》]+)》/g, '<ruby>$1<rt>$2</rt></ruby>');
-                // Auto Kanji Ruby Kanji《Furi》
-                s = s.replace(/([一-龠々〆ヵヶ]+)《([^》]+)》/g, '<ruby>$1<rt>$2</rt></ruby>');
-                // Safe Ruby ruby{Kanji|Furi}
-                s = s.replace(/ruby\{([^}|]+)\|([^}]+)\}/g, '<ruby>$1<rt>$2</rt></ruby>');
-                return s;
-            };
-
             const processInline = (str) => {
                 let s = str;
                 for (let i = 0; i < 10; i++) {
@@ -592,10 +570,6 @@
                 s = s.replace(/''([^']+)''/g, '<b>$1</b>');
                 s = s.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<span class="wiki-link" data-article-id="$2">🔗 $1</span>');
                 s = s.replace(/\[\[([^\]]+)\]\]/g, '<span class="wiki-link" data-wiki-title="$1">🔗 $1</span>');
-
-                // Ruby Support
-                s = applyRuby(s);
-
                 return s;
             };
 
@@ -833,14 +807,31 @@
         };
 
         // --- Member Manager ---
-        const MemberManager = ({ db, worldId, appContextId, onClose, members = [], onAddMember }) => {
+        const MemberManager = ({ db, worldId, appContextId, onClose }) => {
+            const [members, setMembers] = React.useState([]);
             const [inviteId, setInviteId] = React.useState('');
             const [loading, setLoading] = React.useState(false);
 
+            React.useEffect(() => {
+                const { collection, onSnapshot } = window.firebaseModules;
+                return onSnapshot(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members'), s => {
+                    setMembers(s.docs.map(d => ({ id: d.id, ...d.data() })));
+                });
+            }, [db, worldId, appContextId]);
+
             const addMember = async () => {
                 if (!inviteId.trim()) return;
-                await onAddMember(inviteId.trim());
-                setInviteId('');
+                const name = prompt("メンバーの表示名を入力してください (任意)", "");
+                setLoading(true);
+                try {
+                    const { doc, setDoc, serverTimestamp } = window.firebaseModules;
+                    await setDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', inviteId.trim()), {
+                        role: 'editor', username: name || '', addedAt: serverTimestamp()
+                    });
+                    setInviteId('');
+                    alert('メンバーを追加しました');
+                } catch (e) { alert('追加エラー: ' + e.message); }
+                setLoading(false);
             };
 
             const updateMemberName = async (member) => {
@@ -910,169 +901,124 @@
             );
         };
 
-        // --- Region Rule Editor (Map-based Interactive) ---
-        const RegionRuleEditor = ({ rules = [], onSave, onClose, worldData }) => {
+        // --- Region Rule Editor (矩形/円エリアのGUI編集) ---
+        const RegionRuleEditor = ({ rules = [], onSave, onClose }) => {
             const [items, setItems] = React.useState(rules);
-            const [mode, setMode] = React.useState('view'); // view, drawing_rect, drawing_circle
-            const [tempPoints, setTempPoints] = React.useState([]);
-            const mapRef = React.useRef(null);
-            const leafletMap = React.useRef(null);
-            const layerGroupRef = React.useRef(null);
-
-            // Init Map
-            React.useEffect(() => {
-                if (!mapRef.current || leafletMap.current) return;
-                const map = L.map(mapRef.current, { crs: L.CRS.Simple, minZoom: -3, maxZoom: 4, zoomControl: true });
-                leafletMap.current = map;
-                layerGroupRef.current = L.layerGroup().addTo(map);
-
-                // Load Background Image
-                const layers = worldData?.mapLayers || (worldData?.mapImageUrl ? [{ id: 'default', url: worldData.mapImageUrl }] : []);
-                if (layers.length > 0) {
-                    const img = new Image();
-                    img.src = layers[0].url;
-                    img.onload = () => {
-                        const bounds = [[-img.height / 2, -img.width / 2], [img.height / 2, img.width / 2]];
-                        L.imageOverlay(layers[0].url, bounds).addTo(map);
-                        map.fitBounds(bounds);
-                    };
-                } else {
-                    const bounds = [[-500, -500], [500, 500]];
-                    L.rectangle(bounds, { color: "#9ca3af", weight: 1, fill: false }).addTo(map);
-                    map.fitBounds(bounds);
-                }
-
-                // Click Handler
-                map.on('click', (e) => {
-                    handleMapClick(e.latlng);
-                });
-            }, []);
-
-            // Ref for accessing current mode in event handler (if needed) but state works if defined inside component (closure)
-            // Render items on map
-            React.useEffect(() => {
-                if (!leafletMap.current || !layerGroupRef.current) return;
-                layerGroupRef.current.clearLayers();
-
-                items.forEach((item, idx) => {
-                    const color = ['#6366f1', '#10b981', '#f59e0b', '#ef4444'][idx % 4];
-                    let layer = null;
-                    if (item.type === 'rect' && item.bounds) {
-                        const b = [[item.bounds.latMin, item.bounds.lngMin], [item.bounds.latMax, item.bounds.lngMax]];
-                        layer = L.rectangle(b, { color, weight: 2, fillOpacity: 0.2 });
-                    } else if (item.type === 'circle' && item.center) {
-                        layer = L.circle([item.center.lat, item.center.lng], { radius: (item.radiusKm || 1) * 1000, color, weight: 2, fillOpacity: 0.2 }); // Leaflet circle radius is meters roughly in CRS.Simple? No, it depends.
-                        // In CRS.Simple, radius is map units. If "radiusKm" is treated as map units:
-                        layer = L.circle([item.center.lat, item.center.lng], { radius: item.radiusKm, color, weight: 2, fillOpacity: 0.2 });
-                    }
-
-                    if (layer) {
-                        layer.bindTooltip(`<b>${item.tag}</b>`, { permanent: true, direction: 'center', className: 'bg-transparent border-0 font-bold shadow-none' });
-                        layer.addTo(layerGroupRef.current);
+            const addRule = () => setItems([...items, { tag: '', type: 'rect', bounds: { latMin: 0, latMax: 0, lngMin: 0, lngMax: 0 } }]);
+            const updateRule = (idx, updater) => setItems(items.map((r, i) => i === idx ? updater(r) : r));
+            const removeRule = (idx) => setItems(items.filter((_, i) => i !== idx));
+            const handleSave = () => { if (onSave) onSave(items); };
+            const previewBounds = React.useMemo(() => {
+                const lats = [];
+                const lngs = [];
+                items.forEach(r => {
+                    if (r.type === 'rect' && r.bounds) {
+                        lats.push(r.bounds.latMin, r.bounds.latMax);
+                        lngs.push(r.bounds.lngMin, r.bounds.lngMax);
+                    } else if (r.type === 'circle' && r.center) {
+                        const dLat = (r.radiusKm || 0) / 111; // 粗い換算
+                        const dLng = (r.radiusKm || 0) / 111;
+                        lats.push(r.center.lat - dLat, r.center.lat + dLat);
+                        lngs.push(r.center.lng - dLng, r.center.lng + dLng);
                     }
                 });
+                const minLat = lats.length ? Math.min(...lats) : -500;
+                const maxLat = lats.length ? Math.max(...lats) : 500;
+                const minLng = lngs.length ? Math.min(...lngs) : -500;
+                const maxLng = lngs.length ? Math.max(...lngs) : 500;
+                // avoid zero range
+                const pad = 10;
+                return { minLat: minLat - pad, maxLat: maxLat + pad, minLng: minLng - pad, maxLng: maxLng + pad };
             }, [items]);
-
-            const handleMapClick = (latlng) => {
-                setMode(prevMode => {
-                    if (prevMode === 'drawing_rect') {
-                        setTempPoints(prev => {
-                            const newPoints = [...prev, latlng];
-                            if (newPoints.length === 2) {
-                                // Finish Rect
-                                const [p1, p2] = newPoints;
-                                const latMin = Math.min(p1.lat, p2.lat);
-                                const latMax = Math.max(p1.lat, p2.lat);
-                                const lngMin = Math.min(p1.lng, p2.lng);
-                                const lngMax = Math.max(p1.lng, p2.lng);
-                                const tag = prompt("タグ名を入力してください:");
-                                if (tag) {
-                                    setItems(current => [...current, { tag, type: 'rect', bounds: { latMin, latMax, lngMin, lngMax } }]);
-                                }
-                                setTempPoints([]);
-                                return []; // Reset in next render by mode change
-                            }
-                            return newPoints;
-                        });
-                        if (tempPoints.length === 1) return 'view'; // Will be handled by effect or logic above? No, setState is async.
-                        // Logic simplified:
-                        // If we just added the 2nd point, we are done.
-                        // But we need to check the updated state.
-                        // Better to handle logic inside the setTempPoints callback or separate ref.
-                        return prevMode; // Stay in mode until 2nd point logic executes
-                    } else if (prevMode === 'drawing_circle') {
-                        setTempPoints(prev => {
-                            if (prev.length === 0) {
-                                return [latlng]; // Set Center
-                            } else {
-                                // Set Radius
-                                const center = prev[0];
-                                const radius = Math.sqrt(Math.pow(latlng.lat - center.lat, 2) + Math.pow(latlng.lng - center.lng, 2));
-                                const tag = prompt("タグ名を入力してください:");
-                                if (tag) {
-                                    setItems(current => [...current, { tag, type: 'circle', center: { lat: center.lat, lng: center.lng }, radiusKm: radius }]);
-                                }
-                                return [];
-                            }
-                        });
-                    }
-                    return prevMode;
-                });
+            const toXY = (lat, lng) => {
+                const { minLat, maxLat, minLng, maxLng } = previewBounds;
+                const w = maxLng - minLng || 1;
+                const h = maxLat - minLat || 1;
+                const x = ((lng - minLng) / w) * 100;
+                const y = (1 - (lat - minLat) / h) * 100; // flip y for svg
+                return { x, y };
             };
-
-            // Side effect to exit mode after shape completion
-            React.useEffect(() => {
-                if (mode === 'drawing_rect' && tempPoints.length === 2) setMode('view');
-                if (mode === 'drawing_circle' && tempPoints.length === 0 && mode !== 'view') setMode('view'); // slightly buggy logic, fix below
-            }, [tempPoints]);
-
-            // Fix circle logic: clearing tempPoints implies done
-            const handleModeChange = (m) => {
-                setMode(m);
-                setTempPoints([]);
-            };
-
-            const removeItem = (idx) => setItems(items.filter((_, i) => i !== idx));
-
             return (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
-                    <div className="bg-white w-full h-full max-w-6xl max-h-[90vh] rounded-lg shadow-2xl flex flex-col overflow-hidden">
-                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
-                            <div className="flex items-center gap-4">
-                                <h3 className="text-lg font-bold flex items-center gap-2"><Icon name="map" /> 地域タグ設定</h3>
-                                <div className="flex bg-white border rounded p-1 gap-1">
-                                    <button onClick={() => handleModeChange('view')} className={`px-3 py-1 rounded text-sm ${mode === 'view' ? 'bg-indigo-100 text-indigo-700 font-bold' : 'hover:bg-gray-100'}`}><Icon name="mouse-pointer" size={14} /> 操作</button>
-                                    <button onClick={() => handleModeChange('drawing_rect')} className={`px-3 py-1 rounded text-sm ${mode === 'drawing_rect' ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-gray-100'}`}><Icon name="square" size={14} /> 矩形追加</button>
-                                    <button onClick={() => handleModeChange('drawing_circle')} className={`px-3 py-1 rounded text-sm ${mode === 'drawing_circle' ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-gray-100'}`}><Icon name="circle" size={14} /> 円追加</button>
-                                </div>
-                                <div className="text-sm text-gray-500">
-                                    {mode === 'drawing_rect' && (tempPoints.length === 0 ? '始点をクリック' : '終点をクリック')}
-                                    {mode === 'drawing_circle' && (tempPoints.length === 0 ? '中心をクリック' : '半径位置をクリック')}
-                                </div>
-                            </div>
-                            <div className="flex gap-2">
-                                <button onClick={onClose} className="px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
-                                <button onClick={() => onSave(items)} className="px-6 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700">保存</button>
+                    <div className="bg-white w-full max-w-3xl rounded-lg shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Icon name="map" size={18} /> 地域タグ自動付与ルール</h3>
+                            <button onClick={onClose} className="text-gray-500 hover:text-gray-800"><Icon name="x" size={18} /></button>
+                        </div>
+                        <p className="text-xs text-gray-500">矩形または円のエリアを定義すると、記事の座標が含まれる場合にタグが自動追加されます。</p>
+                        <div className="bg-slate-100 border rounded p-3">
+                            <div className="text-xs font-bold text-gray-600 mb-2">プレビュー</div>
+                            <div className="w-full h-48 bg-white border rounded relative overflow-hidden">
+                                <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full">
+                                    <rect x="0" y="0" width="100" height="100" fill="#f8fafc" stroke="#cbd5e1" />
+                                    <g className="text-[8px]" fill="none" strokeWidth="1.5">
+                                        {items.map((r, idx) => {
+                                            const color = ['#6366f1', '#10b981', '#f59e0b', '#ef4444'][idx % 4];
+                                            if (r.type === 'rect' && r.bounds) {
+                                                const p1 = toXY(r.bounds.latMax, r.bounds.lngMin);
+                                                const p2 = toXY(r.bounds.latMin, r.bounds.lngMax);
+                                                const w = Math.abs(p2.x - p1.x);
+                                                const h = Math.abs(p2.y - p1.y);
+                                                const x = Math.min(p1.x, p2.x);
+                                                const y = Math.min(p1.y, p2.y);
+                                                return (
+                                                    <g key={idx}>
+                                                        <rect x={x} y={y} width={w} height={h} stroke={color} fill={`${color}20`} />
+                                                        <text x={x + 1} y={y + 6} fill={color}>{r.tag || 'rect'}</text>
+                                                    </g>
+                                                );
+                                            }
+                                            if (r.type === 'circle' && r.center) {
+                                                const center = toXY(r.center.lat || 0, r.center.lng || 0);
+                                                const d = (r.radiusKm || 0) / 111;
+                                                const edge = toXY((r.center.lat || 0) + d, r.center.lng || 0);
+                                                const ry = Math.abs(edge.y - center.y);
+                                                return (
+                                                    <g key={idx}>
+                                                        <circle cx={center.x} cy={center.y} r={ry} stroke={color} fill={`${color}20`} />
+                                                        <text x={center.x + 1} y={center.y} fill={color}>{r.tag || 'circle'}</text>
+                                                    </g>
+                                                );
+                                            }
+                                            return null;
+                                        })}
+                                    </g>
+                                </svg>
                             </div>
                         </div>
-                        <div className="flex-1 flex overflow-hidden">
-                            <div className="w-64 border-r bg-gray-50 overflow-y-auto p-2 space-y-2">
-                                <div className="text-xs font-bold text-gray-500 mb-2">登録済みルール ({items.length})</div>
-                                {items.map((item, idx) => (
-                                    <div key={idx} className="bg-white p-2 rounded border shadow-sm text-sm group">
-                                        <div className="flex justify-between items-center font-bold text-gray-800">
-                                            <span>{item.tag}</span>
-                                            <button onClick={() => removeItem(idx)} className="text-gray-400 hover:text-red-500"><Icon name="trash-2" size={14} /></button>
-                                        </div>
-                                        <div className="text-xs text-gray-500 mt-1">
-                                            {item.type === 'rect' ? '矩形エリア' : '円形エリア'}
-                                        </div>
+                        <div className="space-y-3">
+                            {items.map((rule, idx) => (
+                                <div key={idx} className="border rounded-lg p-3 bg-gray-50 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <input className="border p-1 rounded text-sm flex-1" placeholder="タグ名 (例: north)" value={rule.tag} onChange={e => updateRule(idx, r => ({ ...r, tag: e.target.value }))} />
+                                        <select className="border p-1 rounded text-sm" value={rule.type} onChange={e => updateRule(idx, r => ({ ...r, type: e.target.value }))}>
+                                            <option value="rect">矩形</option>
+                                            <option value="circle">円</option>
+                                        </select>
+                                        <button onClick={() => removeRule(idx)} className="text-red-500 text-xs border px-2 py-1 rounded hover:bg-red-50">削除</button>
                                     </div>
-                                ))}
-                                {items.length === 0 && <div className="text-xs text-gray-400 text-center py-4">ルールはまだありません</div>}
-                            </div>
-                            <div className="flex-1 relative">
-                                <div className="absolute inset-0 bg-slate-200" ref={mapRef}></div>
+                                    {rule.type === 'rect' ? (
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                                            <input className="border p-1 rounded" placeholder="latMin" type="number" value={rule.bounds?.latMin ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), latMin: Number(e.target.value) } }))} />
+                                            <input className="border p-1 rounded" placeholder="latMax" type="number" value={rule.bounds?.latMax ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), latMax: Number(e.target.value) } }))} />
+                                            <input className="border p-1 rounded" placeholder="lngMin" type="number" value={rule.bounds?.lngMin ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), lngMin: Number(e.target.value) } }))} />
+                                            <input className="border p-1 rounded" placeholder="lngMax" type="number" value={rule.bounds?.lngMax ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), lngMax: Number(e.target.value) } }))} />
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-3 gap-2 text-xs">
+                                            <input className="border p-1 rounded" placeholder="中心 lat" type="number" value={rule.center?.lat ?? ''} onChange={e => updateRule(idx, r => ({ ...r, center: { ...(r.center || {}), lat: Number(e.target.value) } }))} />
+                                            <input className="border p-1 rounded" placeholder="中心 lng" type="number" value={rule.center?.lng ?? ''} onChange={e => updateRule(idx, r => ({ ...r, center: { ...(r.center || {}), lng: Number(e.target.value) } }))} />
+                                            <input className="border p-1 rounded" placeholder="半径 km" type="number" value={rule.radiusKm ?? ''} onChange={e => updateRule(idx, r => ({ ...r, radiusKm: Number(e.target.value) }))} />
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <button onClick={addRule} className="px-3 py-2 text-sm bg-gray-100 rounded flex items-center gap-1"><Icon name="plus" size={14} /> ルール追加</button>
+                            <div className="flex gap-2">
+                                <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded text-sm">キャンセル</button>
+                                <button onClick={handleSave} className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-bold">保存</button>
                             </div>
                         </div>
                     </div>
@@ -1292,74 +1238,22 @@
         // --- Article Link Inserter ---
         const ArticleLinkInserter = ({ articles, onInsert }) => {
             const [query, setQuery] = React.useState('');
-            const [searchMode, setSearchMode] = React.useState('title'); // 'title' or 'tag'
-
-            const filtered = React.useMemo(() => {
-                if (!query) return [];
-                const lowerQuery = query.toLowerCase();
-
-                if (searchMode === 'tag') {
-                    // タグ検索: 記事のタグ配列に部分一致するタグが含まれているかチェック
-                    return articles.filter(a =>
-                        a.tags && a.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
-                    );
-                } else {
-                    // 記事名検索
-                    return articles.filter(a =>
-                        a.title.toLowerCase().includes(lowerQuery)
-                    );
-                }
-            }, [articles, query, searchMode]);
-
+            const filtered = React.useMemo(() => query ? articles.filter(a => a.title.toLowerCase().includes(query.toLowerCase())) : [], [articles, query]);
             return (
                 <div className="space-y-2 bg-white border p-2 rounded">
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs font-bold text-gray-500">
-                            {searchMode === 'title' ? '記事名検索' : 'タグ検索'}
-                        </label>
-                        <div className="flex gap-1">
-                            <button
-                                onClick={() => setSearchMode('title')}
-                                className={`px-2 py-0.5 text-xs rounded ${searchMode === 'title' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}
-                            >
-                                記事名
-                            </button>
-                            <button
-                                onClick={() => setSearchMode('tag')}
-                                className={`px-2 py-0.5 text-xs rounded ${searchMode === 'tag' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}
-                            >
-                                タグ
-                            </button>
-                        </div>
-                    </div>
-                    <input
-                        className="w-full border p-1 text-sm rounded"
-                        placeholder={searchMode === 'title' ? '記事名を検索...' : 'タグを検索...'}
-                        value={query}
-                        onChange={e => setQuery(e.target.value)}
-                    />
-                    <div className="max-h-48 overflow-y-auto space-y-1 custom-scrollbar">
+                    <label className="text-xs font-bold text-gray-500">記事名検索</label>
+                    <input className="w-full border p-1 text-sm rounded" placeholder="記事名を検索..." value={query} onChange={e => setQuery(e.target.value)} />
+                    <div className="max-h-32 overflow-y-auto space-y-1">
                         {filtered.map(a => (
-                            <div key={a.id} className="w-full text-left text-xs px-2 py-1 hover:bg-indigo-50 rounded group">
-                                <div className="flex justify-between items-center gap-2">
-                                    <div className="flex-1 pr-2 min-w-0">
-                                        <div className="overflow-x-auto whitespace-nowrap text-sm font-medium" style={{ maxWidth: '100%' }} title={a.title}>
-                                            {a.title}
-                                        </div>
-                                        {searchMode === 'tag' && a.tags && a.tags.length > 0 && (
-                                            <div className="flex flex-wrap gap-1 mt-1">
-                                                {a.tags.map(tag => (
-                                                    <span key={tag} className="text-[10px] bg-gray-100 text-gray-600 px-1 rounded">
-                                                        #{tag}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        )}
+                            <div key={a.id} className="w-full text-left text-xs px-2 py-1 hover:bg-indigo-50 rounded flex justify-between items-center group">
+                                <div className="flex-1 pr-2">
+                                    <div className="overflow-x-auto whitespace-nowrap text-sm" style={{ maxWidth: '100%' }} title={a.title}>
+                                        {a.title}
                                     </div>
-                                    <div className="flex gap-2 shrink-0">
-                                        <button onClick={() => { copyText(a.id); }} className="text-gray-400 hover:text-indigo-600 text-xs">IDコピー</button>
-                                        <button onClick={() => { onInsert(a); setQuery(''); }} className="text-indigo-600 font-bold text-xs">挿入</button>
-                                    </div>
+                                </div>
+                                <div className="flex gap-2 shrink-0">
+                                    <button onClick={() => { copyText(a.id); }} className="text-gray-400 hover:text-indigo-600 text-xs">IDコピー</button>
+                                    <button onClick={() => { onInsert(a); setQuery(''); }} className="text-indigo-600 font-bold text-xs">挿入</button>
                                 </div>
                             </div>
                         ))}
@@ -1460,15 +1354,12 @@
                         try { const s = localStorage.getItem('worldweaver_firebase_config'); if (s) config = JSON.parse(s); } catch (e) { }
                         setActiveConfig(config);
                         setAppContextId(appId);
-                        const { initializeApp, getAuth, getFirestore, getStorage, onAuthStateChanged, getApps, setPersistence, browserLocalPersistence } = modules;
+                        const { initializeApp, getAuth, getFirestore, getStorage, onAuthStateChanged, getApps } = modules;
                         let app = getApps().length > 0 ? getApps()[0] : initializeApp(config);
-                        const authInstance = getAuth(app);
-                        setAuth(authInstance);
+                        setAuth(getAuth(app));
                         setDb(getFirestore(app));
                         try { setStorage(getStorage(app)); } catch (e) { }
-                        // ログイン情報を永続化（ブラウザを閉じても保持）
-                        setPersistence(authInstance, browserLocalPersistence).catch(e => console.warn('Persistence setup failed:', e));
-                        onAuthStateChanged(authInstance, u => { setUser(u); setLoading(false); });
+                        onAuthStateChanged(getAuth(app), u => { setUser(u); setLoading(false); });
                     } catch (e) { setError(e.message); setLoading(false); }
                 };
                 return () => clearInterval(timer);
@@ -1494,23 +1385,20 @@
             const isSelected = selectedFolder === node.fullPath;
             return (
                 <div className="select-none">
-                    <div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition ${isSelected ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-slate-700 text-slate-300'}`} style={{ paddingLeft: `${depth * 16 + 8}px` }} onClick={() => { if (node.articles.length > 0) onSelect(node); else setIsOpen(!isOpen); }}>
-                        {hasChildren ? (<span onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} className="p-0.5 hover:bg-slate-600 rounded text-slate-400"><Icon name={isOpen ? "chevron-down" : "chevron-right"} size={14} /></span>) : (<span className="w-4"></span>)}
-                        <Icon name={node.icon || (hasChildren ? (isOpen ? "folder-open" : "folder") : "folder")} size={14} className={hasChildren || node.icon ? "text-indigo-400" : "text-slate-500"} />
+                    <div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition ${isSelected ? 'bg-indigo-100 text-indigo-900 font-bold' : 'hover:bg-gray-100 text-gray-700'}`} style={{ paddingLeft: `${depth * 16 + 8}px` }} onClick={() => { if (node.articles.length > 0) onSelect(node); else setIsOpen(!isOpen); }}>
+                        {hasChildren ? (<span onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} className="p-0.5 hover:bg-gray-200 rounded text-gray-400"><Icon name={isOpen ? "chevron-down" : "chevron-right"} size={14} /></span>) : (<span className="w-4"></span>)}
+                        <Icon name={hasChildren ? (isOpen ? "folder-open" : "folder") : "folder"} size={14} className={hasChildren ? "text-indigo-400" : "text-gray-400"} />
                         <span className="truncate text-sm flex-1">{name}</span>
-                        {node.articles.length > 0 && <span className="text-[10px] bg-slate-700 px-1.5 rounded-full text-slate-300">{node.articles.length}</span>}
+                        {node.articles.length > 0 && <span className="text-[10px] bg-gray-200 px-1.5 rounded-full text-gray-500">{node.articles.length}</span>}
                     </div>
                     {isOpen && hasChildren && <div>{Object.entries(node.children).sort((a, b) => a[0].localeCompare(b[0])).map(([childName, childNode]) => (<FolderTreeItem key={childName} name={childName} node={childNode} depth={depth + 1} onSelect={onSelect} selectedFolder={selectedFolder} />))}</div>}
                 </div>
             );
         };
 
-        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange, onlyApproved = false, onlyUnapproved = false, filterFn = null }) => {
+        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange, onlyApproved = false }) => {
             const [selectedFolderNode, setSelectedFolderNode] = React.useState(null);
             const [query, setQuery] = React.useState('');
-            const [showSidebar, setShowSidebar] = React.useState(false);
-            const [layoutStyle, setLayoutStyle] = React.useState('list'); // 'list' | 'grid'
-
             const handleContentClick = (e) => {
                 const link = e.target.closest && e.target.closest('.wiki-link');
                 if (!link) return;
@@ -1520,153 +1408,73 @@
                 if (id) {
                     const target = articles.find(a => a.id === id);
                     if (target) {
+                        // if target has year, ensure timeline filter shows dated articles
                         const y = getArticleYear(target);
-                        const hasYear = y && y !== 0 && !target.noYear;
-                        if (typeof onSearchChange === 'function') {
-                            try { onSearchChange({ excludeNoYear: hasYear }); } catch (e) { console.warn(e); }
+                        if (y && typeof onSearchChange === 'function') {
+                            try { onSearchChange({ excludeNoYear: true }); } catch (e) { console.warn(e); }
                         }
                         if (onSelectArticle) onSelectArticle(target);
                     } else alert('リンク先の記事が見つかりません');
                 } else if (wikiTitle) {
+                    // handle special wiki titles (例: 年代なし)
                     if (wikiTitle === '年代なし' && onOpenNoYear) {
                         onOpenNoYear();
                         return;
                     }
+                    // fallback: try find by exact title
                     const target = articles.find(a => (a.title || '').trim() === wikiTitle.trim());
-                    if (target) {
-                        const y = getArticleYear(target);
-                        const hasYear = y && y !== 0 && !target.noYear;
-                        if (typeof onSearchChange === 'function') {
-                            try { onSearchChange({ excludeNoYear: hasYear }); } catch (e) { console.warn(e); }
-                        }
-                        if (onSelectArticle) onSelectArticle(target);
-                    } else alert('リンク先の記事が見つかりません');
+                    if (target && onSelectArticle) onSelectArticle(target);
+                    else alert('リンク先の記事が見つかりません');
                 }
             };
-
             const folderTree = React.useMemo(() => {
                 const root = { name: 'root', fullPath: '', children: {}, articles: [] };
-                // フィルタ適用後の記事リストでツリーを構築
-                let targetArticles = articles;
-                if (filterFn) {
-                    targetArticles = articles.filter(filterFn);
-                }
-
-                const allArticlesNode = { name: 'すべての記事', fullPath: 'ALL', children: {}, articles: targetArticles, icon: 'layers' };
-                const uncategorizedNode = { name: '未分類', fullPath: '未分類', children: {}, articles: [], icon: 'inbox' };
-                const rootDocsNode = { name: '(ルート)', fullPath: '(root)', children: {}, articles: [], icon: 'file' };
-
-                targetArticles.forEach(article => {
-                    const hasFolder = !!article.folder;
-                    const hasTags = article.tags && article.tags.length > 0;
-                    const hasPendingTag = hasTags && article.tags.includes('分類待ち');
-
-                    if (!hasFolder) {
-                        // フォルダなしの場合の振り分けロジック
-                        // タグなし、または「分類待ち」タグがある場合は「未分類」へ
-                        if (!hasTags || hasPendingTag) {
-                            uncategorizedNode.articles.push(article);
-                        } else {
-                            // タグはあるがフォルダ指定がないものはルート直下へ（便宜上 (ルート) フォルダに入れる）
-                            rootDocsNode.articles.push(article);
-                        }
-                    } else {
-                        // フォルダあり
-                        if (article.folder === '未分類') {
-                            uncategorizedNode.articles.push(article);
-                        } else {
-                            const parts = article.folder.split('/').filter(Boolean);
-                            let current = root;
-                            let currentPath = '';
-                            parts.forEach((part) => {
-                                currentPath = currentPath ? `${currentPath}/${part}` : part;
-                                if (!current.children[part]) current.children[part] = { name: part, fullPath: currentPath, children: {}, articles: [] };
-                                current = current.children[part];
-                            });
-                            current.articles.push(article);
-                        }
+                const allArticlesNode = { name: 'すべての記事', fullPath: 'ALL', children: {}, articles: articles };
+                const uncategorizedNode = { name: '未分類', fullPath: '未分類', children: {}, articles: [] };
+                articles.forEach(article => {
+                    const folderPath = article.folder || '未分類';
+                    if (folderPath === '未分類') uncategorizedNode.articles.push(article);
+                    else {
+                        const parts = folderPath.split('/').filter(Boolean);
+                        let current = root;
+                        let currentPath = '';
+                        parts.forEach((part) => {
+                            currentPath = currentPath ? `${currentPath}/${part}` : part;
+                            if (!current.children[part]) current.children[part] = { name: part, fullPath: currentPath, children: {}, articles: [] };
+                            current = current.children[part];
+                        });
+                        current.articles.push(article);
                     }
                 });
-
                 if (uncategorizedNode.articles.length > 0) root.children['未分類'] = uncategorizedNode;
-                if (rootDocsNode.articles.length > 0) root.children['(ルート)'] = rootDocsNode;
-
                 return { root, allNode: allArticlesNode };
-            }, [articles, filterFn]);
-
+            }, [articles]);
             React.useEffect(() => { if (!selectedFolderNode && articles.length > 0) setSelectedFolderNode(folderTree.allNode); }, [articles, selectedFolderNode, folderTree]);
-
             const displayArticles = React.useMemo(() => {
                 let target = selectedFolderNode ? selectedFolderNode.articles : [];
                 if (onlyApproved) target = target.filter(a => a.isApproved);
-                if (onlyUnapproved) target = target.filter(a => !a.isApproved);
-                if (query) { const lower = query.toLowerCase(); target = target.filter(a => [a.title, a.folder, stripHtml(a.contentHtml)].join(' ').toLowerCase().includes(lower)); }
+                if (query) { const lower = query.toLowerCase(); target = articles.filter(a => [a.title, a.folder, stripHtml(a.contentHtml)].join(' ').toLowerCase().includes(lower)); }
                 return sortByChronology(target);
-            }, [selectedFolderNode, query, onlyApproved, onlyUnapproved]);
-
+            }, [selectedFolderNode, query, articles, onlyApproved]);
             return (
-                <div className="flex h-full bg-slate-900 relative">
-                    <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-slate-800 transition-transform transform ${showSidebar ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:flex-shrink-0 border-r border-slate-700 flex flex-col h-full`}>
-                        <div className="md:hidden absolute top-2 right-2">
-                            <button onClick={() => setShowSidebar(false)} className="text-slate-400 hover:text-white"><Icon name="x" size={20} /></button>
-                        </div>
-                        <div className="p-3 border-b border-slate-700 bg-slate-800/50 flex flex-col gap-2">
-                            <input className="w-full border border-slate-600 bg-slate-700 text-white placeholder-slate-400 rounded px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none" placeholder="記事を検索..." value={query} onChange={e => setQuery(e.target.value)} />
-                            <div className="flex justify-between items-center text-xs text-slate-400">
-                                <span>表示形式:</span>
-                                <div className="flex bg-slate-700 rounded p-0.5">
-                                    <button onClick={() => setLayoutStyle('list')} className={`p-1 rounded ${layoutStyle === 'list' ? 'bg-slate-500 text-white' : 'hover:text-white'}`} title="リスト"><Icon name="list" size={14} /></button>
-                                    <button onClick={() => setLayoutStyle('grid')} className={`p-1 rounded ${layoutStyle === 'grid' ? 'bg-slate-500 text-white' : 'hover:text-white'}`} title="グリッド"><Icon name="grid" size={14} /></button>
-                                </div>
-                            </div>
-                        </div>
+                <div className="flex h-full bg-white">
+                    <div className="w-64 flex-shrink-0 border-r bg-gray-50 flex flex-col h-full overflow-hidden">
+                        <div className="p-3 border-b bg-gray-100"><input className="w-full border rounded px-2 py-1 text-sm" placeholder="記事を検索..." value={query} onChange={e => setQuery(e.target.value)} /></div>
                         <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                            {!query && <>
-                                <FolderTreeItem name="すべての記事" node={folderTree.allNode} onSelect={(n) => { setSelectedFolderNode(n); if (window.innerWidth < 768) setShowSidebar(false); }} selectedFolder={selectedFolderNode?.fullPath} />
-                                <hr className="my-2 border-slate-700" />
-                                {Object.entries(folderTree.root.children).sort((a, b) => {
-                                    // 未分類と(ルート)は最後にするなどのソートロジックが必要ならここ
-                                    if (a[0] === '未分類') return 1;
-                                    if (b[0] === '未分類') return -1;
-                                    return a[0].localeCompare(b[0]);
-                                }).map(([name, node]) => (<FolderTreeItem key={name} name={name} node={node} onSelect={(n) => { setSelectedFolderNode(n); if (window.innerWidth < 768) setShowSidebar(false); }} selectedFolder={selectedFolderNode?.fullPath} />))}
-                            </>}
+                            {!query && <><div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition mb-1 ${selectedFolderNode?.fullPath === 'ALL' ? 'bg-indigo-100 text-indigo-900 font-bold' : 'hover:bg-gray-100 text-gray-700'}`} onClick={() => setSelectedFolderNode(folderTree.allNode)}><Icon name="layers" size={14} className="text-indigo-500" /><span className="text-sm">すべての記事</span><span className="text-[10px] bg-gray-200 px-1.5 rounded-full ml-auto">{articles.length}</span></div><hr className="my-2 border-gray-200" />{Object.entries(folderTree.root.children).sort((a, b) => a[0].localeCompare(b[0])).map(([name, node]) => (<FolderTreeItem key={name} name={name} node={node} onSelect={setSelectedFolderNode} selectedFolder={selectedFolderNode?.fullPath} />))}</>}
                         </div>
                     </div>
-                    {showSidebar && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setShowSidebar(false)}></div>}
-                    <button className="md:hidden fixed bottom-6 right-6 z-50 p-3 bg-indigo-600 rounded-full text-white shadow-lg flex items-center justify-center animate-bounce" onClick={() => setShowSidebar(!showSidebar)}><Icon name="menu" size={24} /></button>
-                    <div className="flex-1 overflow-y-auto p-4 bg-slate-900 custom-scrollbar w-full">
-                        <div className={layoutStyle === 'grid' ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" : "space-y-4"}>
+                    <div className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar">
+                        <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
                             {displayArticles.map(article => (
-                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className={`bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:border-indigo-500 hover:bg-slate-800 transition group flex flex-col ${layoutStyle === 'grid' ? 'h-full' : 'p-6'}`}>
-                                    {layoutStyle === 'grid' ? (
-                                        <>
-                                            <div className="p-4 flex-1">
-                                                <div className="flex items-center justify-between text-[10px] text-slate-400 mb-2">
-                                                    <span className={`px-1.5 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-100 text-gray-800'}`}>{ARTICLE_TYPES[article.type]?.label || 'その他'}</span>
-                                                    <span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span>
-                                                </div>
-                                                <h3 className="font-bold text-white group-hover:text-indigo-400 mb-2 flex items-center gap-1 leading-snug">
-                                                    {article.isApproved && <Icon name="check-circle" size={14} className="text-emerald-400 shrink-0" />}
-                                                    <span className="truncate-2-lines" dangerouslySetInnerHTML={{ __html: applyRuby(escapeHtml(article.title)) }}></span>
-                                                </h3>
-                                                <div className="text-xs text-slate-400 line-clamp-3 mb-2" dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
-                                            </div>
-                                            <div className="px-4 pb-4 pt-0 mt-auto">
-                                                <div className="flex flex-wrap gap-1">{article.tags?.slice(0, 3).map(tag => <span key={tag} className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">#{tag}</span>)}</div>
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <div className="flex items-center justify-between text-xs text-slate-400 mb-3"><span className={`px-2 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-100 text-gray-800'}`}>{ARTICLE_TYPES[article.type]?.label || 'その他'}</span><span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span></div>
-                                            <h3 className="text-xl font-bold text-white group-hover:text-indigo-400 mb-3 flex items-center gap-2">
-                                                {article.isApproved && <Icon name="check-circle" size={16} className="text-emerald-400" />}
-                                                <span dangerouslySetInnerHTML={{ __html: applyRuby(escapeHtml(article.title)) }}></span>
-                                            </h3>
-                                            <div className="text-sm text-slate-300 mb-4 leading-relaxed line-clamp-3" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
-                                            <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{article.tags?.map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
-                                        </>
-                                    )}
+                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className="bg-white border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-indigo-400 hover:shadow-md transition flex flex-col gap-2 group">
+                                    <div className="flex items-center justify-between text-xs text-gray-400"><span className={`px-2 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color}`}>{ARTICLE_TYPES[article.type]?.label}</span><span className="font-mono bg-gray-50 px-1 rounded">{article.dateStr || article.year}</span></div>
+                                    <h3 className="text-base font-bold text-gray-800 group-hover:text-indigo-700 line-clamp-1 flex items-center gap-1">
+                                        {article.isApproved && <Icon name="check-circle" size={14} className="text-emerald-500" />}
+                                        {article.title}
+                                    </h3>
+                                    <div className="text-xs text-gray-500 line-clamp-2 h-8" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
+                                    <div className="flex flex-wrap gap-1 mt-auto pt-2 border-t border-gray-50">{article.tags?.map(tag => <span key={tag} className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">#{tag}</span>)}</div>
                                 </div>
                             ))}
                         </div>
@@ -1709,7 +1517,7 @@
         };
 
         // MapView: 年代バー付き・複数地点対応・レイヤー切り替え対応
-        const MapView = ({ articles = [], worldData, onSelectArticle, onLocationSelect, isEditing = false, storage, highlightArticleId, appContextId, showControls = true, myRole = 'guest', externalQuery, onExternalQueryChange, restrictToHighlightOnEdit = true, minImportance = 0 }) => {
+        const MapView = ({ articles = [], worldData, onSelectArticle, onLocationSelect, isEditing = false, storage, highlightArticleId, appContextId, showControls = true, myRole = 'guest', externalQuery, onExternalQueryChange, restrictToHighlightOnEdit = true }) => {
             const mapRef = React.useRef(null);
             const leafletMap = React.useRef(null);
             const markersRef = React.useRef([]);
@@ -1775,14 +1583,13 @@
                     });
                 }
 
-                if (!q && !minImportance) return base;
+                if (!q) return base;
                 const matches = (a) => {
-                    if (minImportance > 0 && (a.importance || 3) < minImportance) return false;
                     const hay = [a.title || '', stripHtml(a.contentHtml || ''), (a.tags || []).join(' '), a.representedTag || ''].join(' ').toLowerCase();
                     return hay.includes(q);
                 };
                 return base.filter(matches);
-            }, [articles, yearRange, isEditing, showControls, mapQuery, externalQuery, highlightArticleId, restrictToHighlightOnEdit, minImportance]);
+            }, [articles, yearRange, isEditing, showControls, mapQuery, externalQuery, highlightArticleId, restrictToHighlightOnEdit]);
 
             React.useEffect(() => {
                 if (!mapRef.current || leafletMap.current) return;
@@ -1873,13 +1680,15 @@
                         </div>
                     )}
 
-                    {/* Map search input (visible when controls shown and not editing, and no external query) */}
-                    {!isEditing && showControls && externalQuery === undefined && (
+                    {/* Map search input (visible when controls shown and not editing) */}
+                    {!isEditing && showControls && (
                         <div className="absolute top-4 left-4 z-[1000]">
                             <input
-                                value={mapQuery}
+                                value={externalQuery !== undefined ? externalQuery : mapQuery}
                                 onChange={e => {
-                                    setMapQuery(e.target.value);
+                                    const v = e.target.value;
+                                    if (onExternalQueryChange) onExternalQueryChange(v);
+                                    else setMapQuery(v);
                                 }}
                                 placeholder="地図検索 (タイトル/本文/タグ)..."
                                 className="p-2 rounded bg-white/90 text-sm border w-64 shadow-sm"
@@ -1948,18 +1757,7 @@
                         <input className={`w-full border rounded px-2 py-1.5 text-sm ${inputClass}`} value={searchState.tag || ''} onChange={e => handleChange('tag', e.target.value)} placeholder="#タグ" />
                         <select className={`w-full border rounded px-2 py-1.5 text-sm ${inputClass}`} value={searchState.type || 'all'} onChange={e => handleChange('type', e.target.value)}>{['all', ...Object.keys(ARTICLE_TYPES)].map(k => <option key={k} value={k}>{ARTICLE_TYPES[k]?.label || 'すべて'}</option>)}</select>
                     </div>
-                    <div className="flex items-center gap-2 mt-2">
-                        <label className="text-xs font-bold opacity-70">重要度:</label>
-                        <div className="flex bg-gray-100 rounded p-0.5">
-                            {[1, 2, 3, 4, 5].map(v => (
-                                <button key={v} onClick={() => handleChange('minImportance', searchState.minImportance === v ? 0 : v)} className={`px-2 py-0.5 text-xs rounded ${searchState.minImportance === v ? 'bg-indigo-600 text-white font-bold' : searchState.minImportance > v ? 'text-indigo-600' : 'text-gray-400'}`}>
-                                    {v}
-                                </button>
-                            ))}
-                            <span className="text-[10px] items-center flex px-1 text-gray-400">{searchState.minImportance ? '以上' : '指定なし'}</span>
-                        </div>
-                    </div>
-                    <div className="flex justify-between items-center text-xs opacity-80 mt-2">
+                    <div className="flex justify-between items-center text-xs opacity-80">
                         <div className="flex items-center gap-2">
                             <span>{count}件</span>
                             <label className="flex items-center gap-1 cursor-pointer bg-black/10 px-2 py-0.5 rounded">
@@ -1976,16 +1774,6 @@
         const TagMiniTimeline = ({ tag, articles = [], onSelectArticle, isTreeMode = false, selectedArticleId, onTagClick }) => {
             if (!tag) return null;
             const items = React.useMemo(() => sortByChronology(articles.filter(a => (a.tags || []).includes(tag))), [articles, tag]);
-
-            const displayItems = React.useMemo(() => {
-                if (!selectedArticleId || items.length === 0) return items.slice(0, 3);
-                const currentIndex = items.findIndex(item => item.id === selectedArticleId);
-                if (currentIndex === -1) return items.slice(0, 3);
-                const start = Math.max(0, currentIndex - 1);
-                const end = Math.min(items.length, currentIndex + 2);
-                return items.slice(start, end);
-            }, [items, selectedArticleId]);
-
             if (isTreeMode) {
                 return (
                     <div className="min-w-[200px] bg-white/5 rounded-lg p-3 border border-white/10 snap-start shrink-0 relative">
@@ -1993,7 +1781,7 @@
                         <div onClick={() => onTagClick && onTagClick(tag)} className="text-xs font-bold text-white/80 mb-4 flex items-center gap-2 border-b border-white/10 pb-2 cursor-pointer hover:text-indigo-300 transition-colors"><Icon name="hash" size={12} /> {tag}<span className="ml-auto text-[10px] bg-white/10 px-1.5 rounded-full">{items.length}</span></div>
                         <div className="relative pl-4 space-y-0">
                             <div className="absolute left-0 top-2 bottom-2 w-px bg-white/20"></div>
-                            {displayItems.map(item => {
+                            {items.map(item => {
                                 const isCurrent = item.id === selectedArticleId;
                                 return (
                                     <div key={item.id} className="relative py-1">
@@ -2005,7 +1793,6 @@
                                     </div>
                                 );
                             })}
-                            {items.length > displayItems.length && <div className="text-[10px] text-white/40 italic pl-2 pt-1">他 {items.length - displayItems.length} 件</div>}
                             {items.length === 0 && <div className="text-[10px] text-white/30 italic">記事なし</div>}
                         </div>
                     </div>
@@ -2021,7 +1808,7 @@
         );
 
         // --- LargeTimelineView (構造年表: 統合版) ---
-        const LargeTimelineView = ({ articles = [], onSelectArticle, onEditArticle, onDeleteArticle, onDuplicateArticle, focusedArticle, onFocusChange, allArticles = [], searchState, onSearchChange, onResetFilters, worldData, appContextId, myRole, onOpenNoYear, onOpenTagArticle, tagArticleValue, onTagArticleValueChange, members = [], onAddMember }) => {
+        const LargeTimelineView = ({ articles = [], onSelectArticle, onEditArticle, focusedArticle, onFocusChange, allArticles = [], searchState, onSearchChange, onResetFilters, worldData, appContextId, myRole, onOpenNoYear, onOpenTagArticle, tagArticleValue, onTagArticleValueChange }) => {
             const [showSearch, setShowSearch] = React.useState(false);
             const [centeredArticleId, setCenteredArticleId] = React.useState(null);
             const [viewMode, setViewMode] = React.useState('broad'); // 'broad' (title only) or 'detailed'
@@ -2031,31 +1818,24 @@
             const sortedArticles = React.useMemo(() => sortByChronology(articles), [articles]);
             const isJumpingRef = React.useRef(false);
 
-
             const noYearArticles = React.useMemo(() => sortedArticles.filter(a => {
-                // noYearフラグが立っている、または年代が0/nullの記事
-                if (a.noYear === true) return true;
                 const y = Math.floor(getArticleYear(a));
                 return !y || Number(y) === 0;
             }).sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''))), [sortedArticles]);
 
             const datedArticles = React.useMemo(() => sortedArticles.filter(a => {
-                // noYearフラグが立っている記事は除外
-                if (a.noYear === true) return false;
                 const y = Math.floor(getArticleYear(a));
                 return y && Number(y) !== 0;
             }), [sortedArticles]);
 
             const displayArticles = React.useMemo(() => {
-                // 詳細モードで年代あり記事を表示する場合のロジック
-                // 年代なし記事は年表に表示しない（datedArticlesにはすでに含まれていない）
-                // if (viewMode === 'detailed' && focusedArticle) {
-                //     if (focusedArticle.noYear === true) return [focusedArticle];
-                //     const y = Math.floor(getArticleYear(focusedArticle));
-                //     if (!y || y === 0) return [focusedArticle];
-                // }
+                // If viewing detailed mode and the focused article has no year (or is 0), show just that article
+                if (viewMode === 'detailed' && focusedArticle) {
+                    const y = Math.floor(getArticleYear(focusedArticle));
+                    if (!y || y === 0) return [focusedArticle];
+                }
                 return datedArticles;
-            }, [datedArticles]);
+            }, [datedArticles, focusedArticle, viewMode]);
 
             const scrollToArticle = (id) => {
                 // wait for render if switching modes
@@ -2096,22 +1876,9 @@
 
                     const openTarget = (target) => {
                         if (onSelectArticle) onSelectArticle(target);
-
-                        const y = getArticleYear(target);
-                        const hasYear = y && Number(y) !== 0 && !target.noYear;
-
-                        // 記事の年代状態に応じてフィルタを調整
-                        if (typeof onSearchChange === 'function') {
-                            onSearchChange({ excludeNoYear: hasYear });
-                        }
-
-                        if (hasYear) {
-                            if (window.setAppViewMode) window.setAppViewMode('timeline_large');
-                        } else {
-                            if (window.setAppViewMode) window.setAppViewMode('single_article');
-                        }
-
+                        if (window.setAppViewMode) window.setAppViewMode('single_article');
                         if (typeof onResetFilters !== 'undefined' && onResetFilters) onResetFilters();
+                        else if (typeof onSearchChange === 'function') onSearchChange({ type: 'all', keyword: '', tag: '', excludeNoYear: true });
                     };
 
                     if (id) {
@@ -2133,16 +1900,12 @@
             const handleScroll = () => {
                 if (isJumpingRef.current || !containerRef.current || viewMode === 'broad') return;
                 const container = containerRef.current;
-                const containerRect = container.getBoundingClientRect();
-                const centerY = containerRect.top + containerRect.height / 2;
-
+                const center = container.scrollTop + container.clientHeight / 2;
                 let closest = null, minDst = Infinity;
                 sortedArticles.forEach(a => {
                     const el = articleRefs.current.get(a.id);
                     if (el) {
-                        const elRect = el.getBoundingClientRect();
-                        const elCenterY = elRect.top + elRect.height / 2;
-                        const dst = Math.abs(elCenterY - centerY);
+                        const dst = Math.abs((el.offsetTop + el.offsetHeight / 2) - center);
                         if (dst < minDst) { minDst = dst; closest = a; }
                     }
                 });
@@ -2155,27 +1918,19 @@
             React.useEffect(() => { if (focusedArticle) { const t = setTimeout(() => scrollToArticle(focusedArticle.id), 500); return () => clearTimeout(t); } }, [focusedArticle]);
             const activeArticle = focusedArticle && focusedArticle.id === centeredArticleId ? focusedArticle : sortedArticles.find(a => a.id === centeredArticleId) || focusedArticle;
 
-
-            // 外部から記事が選択されたとき（地図モードなどから遷移してきたとき）は詳細モードに切り替える
-            React.useEffect(() => {
-                if (focusedArticle && viewMode === 'broad') {
-                    setViewMode('detailed');
-                }
-            }, [focusedArticle]);
-
             return (
                 <div className="h-full w-full overflow-hidden bg-slate-900 text-white relative flex flex-col">
-                    <div className="shrink-0 bg-slate-900/90 backdrop-blur px-4 md:px-6 py-4 border-b border-white/10 z-20 relative flex justify-between items-center">
+                    <div className="shrink-0 bg-slate-900/90 backdrop-blur px-6 py-4 border-b border-white/10 z-20 relative flex justify-between items-center">
                         <div className="flex flex-col">
                             <div className="text-[11px] uppercase tracking-widest text-white/60">LARGE TIMELINE</div>
                             <div className="flex items-center gap-3 flex-wrap">
                                 <div className="text-sm text-white mt-1 flex-1">{searchState.keyword || searchState.tag || "全記事"}</div>
-                                <input className="text-sm p-1 rounded bg-white/90 text-gray-800 w-full sm:w-64" placeholder="本文検索..." value={searchState.keyword || ''} onChange={e => onSearchChange({ keyword: e.target.value })} />
+                                <input className="text-sm p-1 rounded bg-white/90 text-gray-800 w-64" placeholder="本文検索..." value={searchState.keyword || ''} onChange={e => onSearchChange({ keyword: e.target.value })} />
                                 <label className="ml-3 text-xs text-white/70 flex items-center gap-2"><input type="checkbox" checked={!!searchState.excludeNoYear} onChange={e => onSearchChange({ excludeNoYear: e.target.checked })} /> 年代設定記事モード</label>
 
                                 {onOpenTagArticle && (
-                                    <div className="flex items-center gap-1 ml-0 sm:ml-4 w-full sm:w-auto">
-                                        <input className="text-sm p-1 rounded bg-white/90 text-gray-800 w-full sm:w-40" placeholder="#タグ/キーワード" value={tagArticleValue || ''} onChange={e => onTagArticleValueChange && onTagArticleValueChange(e.target.value)} />
+                                    <div className="flex items-center gap-1 ml-4">
+                                        <input className="text-sm p-1 rounded bg-white/90 text-gray-800 w-40" placeholder="#タグ/キーワード" value={tagArticleValue || ''} onChange={e => onTagArticleValueChange && onTagArticleValueChange(e.target.value)} />
                                         <button onClick={() => { if (tagArticleValue) onOpenTagArticle(tagArticleValue); }} className="px-2 py-1 bg-emerald-500 text-white text-xs rounded">タグ記録</button>
                                     </div>
                                 )}
@@ -2206,14 +1961,6 @@
                                                 <div className="text-[10px] text-white/60">{a.dateStr || ''}</div>
                                             </div>
                                             <div className="text-xs text-white/60 mt-2 line-clamp-2" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: highlightHtml(transformContent(a.contentHtml || ''), searchState.keyword) }}></div>
-                                            {(myRole === 'owner' || myRole === 'admin') && a.createdBy && (
-                                                <div className="mt-2 flex items-center justify-between">
-                                                    <div onClick={(e) => { e.stopPropagation(); copyText(a.createdBy); }} className="text-[10px] text-white/30 cursor-pointer hover:text-white truncate" title="作成者UIDをコピー">UID: {a.createdBy.slice(0, 6)}...</div>
-                                                    {!members.some(m => m.id === a.createdBy) && (
-                                                        <button onClick={(e) => { e.stopPropagation(); onAddMember && onAddMember(a.createdBy, a.title + " 作者"); }} className="text-[10px] bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded hover:bg-emerald-600/40">メンバ追加</button>
-                                                    )}
-                                                </div>
-                                            )}
                                             <div className="mt-3 flex gap-2 justify-end">
                                                 <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => {
                                                     e.stopPropagation();
@@ -2232,8 +1979,6 @@
                                                     }, 150);
                                                 }} className="px-2 py-1 text-xs bg-white/10 rounded">表示</button>
                                                 <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => { e.stopPropagation(); onEditArticle && onEditArticle(a); }} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded">編集</button>
-                                                <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => { e.stopPropagation(); onDuplicateArticle && onDuplicateArticle(a); }} className="px-2 py-1 text-xs bg-emerald-600 text-white rounded">複製</button>
-                                                {(myRole === 'owner' || myRole === 'admin') && <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => { e.stopPropagation(); onDeleteArticle && onDeleteArticle(a); }} className="px-2 py-1 text-xs bg-red-600 text-white rounded">削除</button>}
                                             </div>
                                         </div>
                                     ))}
@@ -2268,7 +2013,6 @@
                                                 <div className="bg-white/5 border border-white/10 rounded-lg p-4 cursor-pointer hover:bg-white/10 hover:border-indigo-500/50 transition group flex flex-col">
                                                     <div className="flex justify-between items-start mb-1">
                                                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-700 text-gray-300'}`}>{ARTICLE_TYPES[article.type]?.label}</span>
-                                                        <span className="text-[10px] text-yellow-500">{'★'.repeat(article.importance || 3)}</span>
                                                         <span className="font-mono text-indigo-300 text-xs font-bold">{getArticleYear(article)}</span>
                                                     </div>
                                                     <h3 className="text-sm font-bold text-white group-hover:text-indigo-300 line-clamp-2">{article.title}</h3>
@@ -2294,17 +2038,7 @@
                                                                     {article.isApproved && <Icon name="check-circle" size={24} className="text-emerald-400" title="承認済み" />}
                                                                 </h1>
                                                                 <div className="absolute right-4 bottom-4 text-white/20"><Icon name={ARTICLE_TYPES[article.type]?.icon} size={80} /></div>
-                                                                <div className="absolute top-2 right-2 flex flex-col gap-1 items-end">
-                                                                    <button onClick={(e) => { e.stopPropagation(); copyText(article.id); }} className="text-white/50 hover:text-white bg-black/20 px-2 py-1 rounded text-xs">ID: {article.id.slice(0, 4)}...</button>
-                                                                    {(myRole === 'owner' || myRole === 'admin') && article.createdBy && (
-                                                                        <div className="flex flex-col items-end gap-1">
-                                                                            <button onClick={(e) => { e.stopPropagation(); copyText(article.createdBy); }} className="text-white/30 hover:text-white bg-black/20 px-2 py-1 rounded text-[10px]" title="作成者UIDをコピー">UID: {article.createdBy.slice(0, 8)}...</button>
-                                                                            {!members.some(m => m.id === article.createdBy) && (
-                                                                                <button onClick={(e) => { e.stopPropagation(); onAddMember && onAddMember(article.createdBy, article.title + " 作者"); }} className="text-[10px] bg-emerald-600/40 text-emerald-200 border border-emerald-500/30 px-2 py-0.5 rounded hover:bg-emerald-600/60 transition">メンバーに追加</button>
-                                                                            )}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
+                                                                <button onClick={(e) => { e.stopPropagation(); copyText(article.id); }} className="absolute top-2 right-2 text-white/50 hover:text-white bg-black/20 px-2 py-1 rounded text-xs">ID: {article.id.slice(0, 4)}...</button>
                                                             </div>
                                                             <div className="p-6">
                                                                 <div className="flex gap-2 text-xs text-gray-500 mb-4">
@@ -2315,8 +2049,6 @@
                                                                 {article.mainImageUrl && <img src={article.mainImageUrl} className="w-full rounded-lg object-cover max-h-48 border" alt={article.title} />}
                                                                 <div className="mt-4 pt-4 border-t flex justify-end gap-2">
                                                                     <button onClick={(e) => { e.stopPropagation(); onEditArticle(article); }} className="flex items-center gap-1 text-xs text-gray-400 hover:text-indigo-600 border px-2 py-1 rounded hover:bg-gray-50"><Icon name="edit-2" size={12} /> 編集</button>
-                                                                    <button onClick={(e) => { e.stopPropagation(); onDuplicateArticle && onDuplicateArticle(article); }} className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 border border-emerald-200 px-2 py-1 rounded hover:bg-emerald-50"><Icon name="copy" size={12} /> 複製</button>
-                                                                    {(myRole === 'owner' || myRole === 'admin') && <button onClick={(e) => { e.stopPropagation(); onDeleteArticle && onDeleteArticle(article); }} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 border border-red-200 px-2 py-1 rounded hover:bg-red-50"><Icon name="trash-2" size={12} /> 削除</button>}
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -2632,214 +2364,33 @@
             const [mapTabQuery, setMapTabQuery] = React.useState('');
             const [stats, setStats] = React.useState([]);
             const [tagInput, setTagInput] = React.useState('');
-            const [mapTabImportance, setMapTabImportance] = React.useState(0);
             const [authMode, setAuthMode] = React.useState('login');
             const [authForm, setAuthForm] = React.useState({ username: '', password: '', worldName: '', worldDesc: '' });
             const [showConfigEditor, setShowConfigEditor] = React.useState(false);
             const [showMemberManager, setShowMemberManager] = React.useState(false);
             const [showAdminPanel, setShowAdminPanel] = React.useState(false);
             const [showRegionRuleEditor, setShowRegionRuleEditor] = React.useState(false);
-            const [showAuthModal, setShowAuthModal] = React.useState(false);
             const [myMemberData, setMyMemberData] = React.useState(null);
-            const [members, setMembers] = React.useState([]);
             const [authError, setAuthError] = React.useState(null);
             const [timelineFilters, setTimelineFilters] = React.useState({ type: 'all', keyword: '', tag: '', excludeNoYear: true, onlyApproved: false });
-
+            const [regionRules, setRegionRules] = React.useState(REGION_TAG_RULES_DEFAULT);
             const [tagArticleInput, setTagArticleInput] = React.useState('');
-            const [uiScale, setUiScale] = React.useState(100); // UI拡大率 (%)
-            const [previousViewMode, setPreviousViewMode] = React.useState('timeline_large'); // 編集前のビューモードを記憶
-            const [navBackView, setNavBackView] = React.useState('timeline_large'); // 記事詳細から戻る際のビューモード
-            const isRestoringFromURL = React.useRef(false);
-            const hasCheckedWorldURL = React.useRef(false); // URL復元中のフラグ
 
             // Expose setViewMode to window for deep component access (hacky but effective for current structure)
-            // Expose setViewMode to window for deep component access (hacky but effective for current structure)
-            // Update navBackView when switching to single_article from a different view
-            React.useEffect(() => {
-                window.setAppViewMode = (mode) => {
-                    if (mode === 'single_article' && viewMode !== 'single_article') {
-                        setNavBackView(viewMode);
-                    }
-                    setViewMode(mode);
-                };
-                return () => delete window.setAppViewMode;
-            }, [viewMode]);
-
-            const isFixedView = ['timeline_large', 'list', 'map'].includes(viewMode);
-            const scaleStyle = {
-                transform: `scale(${uiScale / 100})`,
-                transformOrigin: 'top left',
-                width: `${100 * 100 / uiScale}%`,
-                height: isFixedView ? `${100 * 100 / uiScale}%` : 'auto',
-                minHeight: isFixedView ? '0' : `${100 * 100 / uiScale}%`
-            };
+            React.useEffect(() => { window.setAppViewMode = setViewMode; return () => delete window.setAppViewMode; }, []);
 
             // これにより、エディタの参照を保持
             const editorRef = React.useRef(null);
             const htmlTextareaRef = React.useRef(null);
 
             React.useEffect(() => {
-                if (!user || !db || hasCheckedWorldURL.current) return;
-                const params = new URLSearchParams(window.location.search);
-                const urlWorldId = params.get('world');
-                if (urlWorldId) {
-                    hasCheckedWorldURL.current = true;
-                    isRestoringFromURL.current = true;
-                    setWorldId(urlWorldId);
-                    setViewMode('timeline_large');
-                    console.log('URL復元: 世界選択', urlWorldId);
-                } else {
-                    hasCheckedWorldURL.current = true;
-                }
-            }, [user, db]);
-
-            // URLから状態を復元（初回読み込み時）
-            React.useEffect(() => {
-                if (!user || !worldId || articles.length === 0 || isRestoringFromURL.current) return;
-
-                const params = new URLSearchParams(window.location.search);
-                const urlView = params.get('view');
-                const urlArticleId = params.get('article');
-                const urlKeyword = params.get('keyword');
-                const urlTag = params.get('tag');
-                const urlMapQuery = params.get('mapQuery');
-                const urlMapImportance = params.get('mapImportance');
-
-                let updated = false;
-
-                if (urlArticleId) {
-                    // 記事IDが指定されている場合、その記事を表示
-                    const article = articles.find(a => a.id === urlArticleId);
-                    if (article) {
-                        isRestoringFromURL.current = true;
-                        setSelectedArticle(article);
-                        if (urlView) setViewMode(urlView);
-                        else setViewMode('single_article');
-                        console.log('URL復元: 記事表示', article.title, urlView);
-                    }
-                } else if (urlView && urlView !== viewMode) {
-                    // ビューモードのみ指定されている場合
-                    isRestoringFromURL.current = true;
-                    setViewMode(urlView);
-                    console.log('URL復元: ビューモード', urlView);
-                }
-
-                if (urlKeyword || urlTag) {
-                    setTimelineFilters(prev => ({ ...prev, keyword: urlKeyword || '', tag: urlTag || '' }));
-                    console.log('URL復元: 検索条件', { keyword: urlKeyword, tag: urlTag });
-                    updated = true;
-                }
-
-                // 年代なしフィルタ状態を復元
-                if (params.has('excludeNoYear')) {
-                    const excludeNoYear = params.get('excludeNoYear') === 'true';
-                    setTimelineFilters(prev => ({ ...prev, excludeNoYear }));
-                    console.log('URL復元: 年代なしフィルタ', excludeNoYear);
-                    updated = true;
-                }
-
-                if (urlMapQuery) {
-                    setMapTabQuery(urlMapQuery);
-                    console.log('URL復元: マップクエリ', urlMapQuery);
-                    updated = true;
-                }
-
-                if (urlMapImportance) {
-                    setMapTabImportance(Number(urlMapImportance));
-                    console.log('URL復元: マップ重要度', urlMapImportance);
-                    updated = true;
-                }
-
-                if (updated) {
-                    isRestoringFromURL.current = true;
-                }
-            }, [user, worldId, articles]);
-
-            // 状態が変更されたらURLを更新（ブラウザの履歴に追加）
-            React.useEffect(() => {
-                if (!worldId || !user || isRestoringFromURL.current) {
-                    isRestoringFromURL.current = false;
-                    return;
-                }
-
-                const timeoutId = setTimeout(() => {
-                    const params = new URLSearchParams();
-                    if (worldId) params.set('world', worldId);
-                    params.set('view', viewMode);
-
-                    if (selectedArticle) {
-                        params.set('article', selectedArticle.id);
-                    }
-
-                    if (timelineFilters.keyword) {
-                        params.set('keyword', timelineFilters.keyword);
-                    }
-                    if (timelineFilters.tag) {
-                        params.set('tag', timelineFilters.tag);
-                    }
-
-                    // 年代なしフィルタ状態もURLに含める
-                    // 年代なしフィルタ状態もURLに含める (デフォルトtrueの場合は省略)
-                    if (timelineFilters.excludeNoYear === false) {
-                        params.set('excludeNoYear', 'false');
-                    }
-
-                    if (viewMode === 'map' && mapTabQuery) {
-                        params.set('mapQuery', mapTabQuery);
-                    }
-                    if (viewMode === 'map' && mapTabImportance > 0) {
-                        params.set('mapImportance', mapTabImportance.toString());
-                    }
-
-                    const newUrl = `${window.location.pathname}?${params.toString()}`;
-                    const currentUrl = `${window.location.pathname}${window.location.search}`;
-
-                    if (newUrl !== currentUrl) {
-                        window.history.pushState({ viewMode, worldId, articleId: selectedArticle?.id }, '', newUrl);
-                        console.log('URL更新:', newUrl);
-                    }
-                }, 1000);
-
-                return () => clearTimeout(timeoutId);
-            }, [viewMode, selectedArticle, worldId, user]);
-
-            // ブラウザの戻る/進むボタンに対応
-            React.useEffect(() => {
-                const handlePopState = (event) => {
-                    if (event.state) {
-                        console.log('履歴から復元:', event.state);
-                        isRestoringFromURL.current = true;
-
-                        if (event.state.viewMode) {
-                            setViewMode(event.state.viewMode);
-                        }
-
-                        if (event.state.articleId && articles.length > 0) {
-                            const article = articles.find(a => a.id === event.state.articleId);
-                            if (article) {
-                                setSelectedArticle(article);
-                            }
-                        } else if (!event.state.articleId) {
-                            setSelectedArticle(null);
-                        }
-                    }
-                };
-
-                window.addEventListener('popstate', handlePopState);
-                return () => window.removeEventListener('popstate', handlePopState);
-            }, [articles]);
-
-            React.useEffect(() => {
                 if (!db || !worldId || !appContextId) return;
                 const { onSnapshot, doc, collection } = window.firebaseModules;
                 const unsubWorld = onSnapshot(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), s => setWorldData(s.data()));
                 const unsubArticles = onSnapshot(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles'), s => {
-                    setArticles(s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => getArticleYear(a) - getArticleYear(b)));
+                    setArticles(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => getArticleYear(a) - getArticleYear(b)));
                 });
-                const unsubMembers = onSnapshot(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members'), s => {
-                    setMembers(s.docs.map(d => ({ ...d.data(), id: d.id })));
-                });
-                return () => { unsubWorld(); unsubArticles(); unsubMembers(); };
+                return () => { unsubWorld(); unsubArticles(); };
             }, [db, worldId, appContextId]);
 
             React.useEffect(() => {
@@ -2863,7 +2414,7 @@
             }, [db, worldId, user, appContextId]);
 
             const myRole = myMemberData?.role || 'guest';
-            const canIApprove = myRole === 'owner' || myRole === 'admin' || myMemberData?.canApprove === true;
+            const canIApprove = myRole === 'owner' || myMemberData?.canApprove === true;
 
             const articleIndex = React.useMemo(() => { const map = new Map(); articles.forEach(a => map.set(a.id, a)); return map; }, [articles]);
             // previewArticles: merge current formData into articles for instant preview in edit mode
@@ -2887,10 +2438,16 @@
                 if (timelineFilters.type && timelineFilters.type !== 'all') summary.push(ARTICLE_TYPES[timelineFilters.type]?.label || timelineFilters.type);
                 return summary.join(' / ') || '全記事';
             }, [timelineFilters]);
-
-            // Remove localStorage region rules hooks
-            const regionRules = worldData?.regionRules || REGION_TAG_RULES_DEFAULT;
-
+            React.useEffect(() => {
+                try {
+                    const raw = localStorage.getItem('worldweaver_region_rules');
+                    if (raw) setRegionRules(JSON.parse(raw));
+                    else setRegionRules(REGION_TAG_RULES_DEFAULT);
+                } catch (e) { setRegionRules(REGION_TAG_RULES_DEFAULT); }
+            }, []);
+            React.useEffect(() => {
+                try { localStorage.setItem('worldweaver_region_rules', JSON.stringify(regionRules || [])); } catch (e) { }
+            }, [regionRules]);
             const handleConfigSave = (newConfig, newAppId) => {
                 localStorage.setItem('worldweaver_firebase_config', JSON.stringify(newConfig));
                 localStorage.setItem('worldweaver_app_id', newAppId);
@@ -2908,8 +2465,7 @@
                         const cred = await createUserWithEmailAndPassword(auth, email, authForm.password);
                         await updateProfile(cred.user, { displayName: authForm.username });
                     }
-                    setShowAuthModal(false);
-                    // No need to reset viewMode to world_select if we want to stay in current context
+                    setViewMode('world_select');
                 } catch (e) { setAuthError(e.message); }
             };
 
@@ -2944,7 +2500,7 @@
                     const lng = Number(formData.lng);
                     if (Number.isFinite(lat) && Number.isFinite(lng)) locationCandidates.push({ lat, lng });
                 }
-                const regionTags = computeRegionTags(locationCandidates, regionRules);
+                const regionTags = computeRegionTags(locationCandidates, regionRules || REGION_TAG_RULES_DEFAULT);
                 const tags = Array.from(new Set([...tagsFromInput, ...regionTags]));
                 // 年代の計算
                 let yearVal = parseInt(formData.year) || 0;
@@ -2986,14 +2542,9 @@
                     lng: Number.isFinite(formData.lng) ? formData.lng : null,
                     locationArticleId: formData.locationArticleId || '',
                     mainImageUrl: formData.mainImageUrl || '',
-                    importance: Number(formData.importance) || 3,
-                    isApproved: isApproved, // Save approval status
                     isApproved: isApproved, // Save approval status
                     updatedAt: serverTimestamp(), updatedBy: user.uid
                 };
-                // IDは保存データに含めない（ドキュメントIDとして管理されるため）
-                delete data.id;
-
                 try {
                     let artId = formData.id;
                     if (formData.id) {
@@ -3033,31 +2584,7 @@
                     }
 
                     setSelectedArticle({ ...data, id: artId });
-
-                    // 年代なし判定: noYearフラグが立っている、または年代が0/nullの場合
-                    const hasYear = !data.noYear && data.year && Number(data.year) !== 0;
-
-                    // 編集前のビューモードを考慮しつつ、適切なビューに遷移
-                    if (previousViewMode === 'timeline_noyear' && !hasYear) {
-                        // 年代なしビューから編集し、年代なしのまま → 年代なしビューに戻る
-                        setViewMode('timeline_noyear');
-                    } else if (previousViewMode === 'single_article') {
-                        // 単独記事表示から編集 → 単独記事表示に戻る
-                        setViewMode('single_article');
-                    } else if (previousViewMode === 'list') {
-                        // 一覧から編集 → 一覧に戻る
-                        setViewMode('list');
-                    } else {
-                        // その他の場合は年代に基づいて判定
-                        if (hasYear) {
-                            setViewMode('timeline_large');
-                        } else {
-                            setViewMode('timeline_noyear');
-                        }
-                    }
-                    // Success Message
-                    alert(isApproved ? "保存しました" : "編集リクエストを送信しました (承認待ち)");
-
+                    setViewMode('timeline_large');
                 } catch (e) { alert(e.message); }
             };
 
@@ -3070,83 +2597,6 @@
                         await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { mapImageUrl: newLayers[0].url });
                     }
                 } catch (e) { alert(e.message); }
-            };
-
-            const handleSaveRegionRules = async (newRules) => {
-                const { updateDoc, doc } = window.firebaseModules;
-                try {
-                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { regionRules: newRules });
-                } catch (e) { alert("ルール保存失敗: " + e.message); }
-            };
-
-            const handleAddMember = async (uid, defaultName = "") => {
-                if (!uid) return;
-                const { doc, setDoc, serverTimestamp } = window.firebaseModules;
-                const name = prompt("メンバーの表示名を入力してください", defaultName);
-                if (name === null) return;
-                try {
-                    await setDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', uid.trim()), {
-                        role: 'editor', username: name || '', joinedAt: serverTimestamp()
-                    });
-                    alert('メンバーを追加しました');
-                } catch (e) { alert('追加エラー: ' + e.message); }
-            };
-            const handleReapplyRegionTags = async () => {
-                if (!confirm('現在の全記事に対して、地域タグ・ルールを再適用しますか？\n\n・ルールに合致するタグが自動追加されます\n・場所が範囲外になった地域タグは自動削除されます\n・手動タグは維持されます')) return;
-                const { updateDoc, doc } = window.firebaseModules;
-                try {
-                    const updates = [];
-                    const managedTags = new Set(regionRules.map(r => r.tag));
-
-                    for (const article of articles) {
-                        const locationCandidates = [];
-                        if (Array.isArray(article.locations)) {
-                            article.locations.forEach(l => {
-                                const lat = Number(l.lat);
-                                const lng = Number(l.lng);
-                                if (Number.isFinite(lat) && Number.isFinite(lng)) locationCandidates.push({ lat, lng });
-                            });
-                        }
-                        if (article.lat !== undefined && article.lat !== null && article.lat !== '') {
-                            const lat = Number(article.lat);
-                            const lng = Number(article.lng);
-                            if (Number.isFinite(lat) && Number.isFinite(lng)) locationCandidates.push({ lat, lng });
-                        }
-
-                        const validRegionTags = new Set(computeRegionTags(locationCandidates, regionRules));
-                        const currentTags = article.tags || [];
-                        const finalTags = new Set();
-                        let changed = false;
-
-                        currentTags.forEach(t => {
-                            if (managedTags.has(t)) {
-                                if (validRegionTags.has(t)) finalTags.add(t);
-                                else changed = true;
-                            } else {
-                                finalTags.add(t);
-                            }
-                        });
-
-                        validRegionTags.forEach(t => {
-                            if (!finalTags.has(t)) {
-                                finalTags.add(t);
-                                changed = true;
-                            }
-                        });
-
-                        if (changed) {
-                            updates.push(updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles', article.id), {
-                                tags: Array.from(finalTags)
-                            }));
-                        }
-                    }
-                    if (updates.length > 0) {
-                        await Promise.all(updates);
-                        alert(`${updates.length} 件の記事のタグを更新しました。`);
-                    } else {
-                        alert("更新が必要な記事はありませんでした。");
-                    }
-                } catch (e) { console.error(e); alert("エラーが発生しました: " + e.message); }
             };
 
             // When switching to the no-year view, if a selectedArticle is set then scroll to it inside that view
@@ -3170,22 +2620,12 @@
 
             const openDetailView = (article, origin = viewMode) => {
                 setSelectedArticle(article);
-                setNavBackView(origin);
-
-                // 記事の年代状態に応じてフィルタを調整
-                const y = getArticleYear(article);
-                const hasYear = y && y !== 0 && !article.noYear;
-
-                // 年代なし記事を開く場合はexcludeNoYearをfalseに、年代あり記事はtrueに
-                setTimelineFilters(prev => ({ ...prev, excludeNoYear: hasYear }));
-
                 // 一覧、マップ、その他どこからでも詳細ビュー（全画面）へ遷移
                 setViewMode('single_article');
             };
 
             const startEditingArticle = (article) => {
                 if (!article) return;
-                setPreviousViewMode(viewMode); // 編集前のビューモードを保存
                 setFormData({
                     ...createEmptyArticle(),
                     ...article,
@@ -3239,70 +2679,28 @@
             const copyMyId = () => {
                 if (!user) return;
                 const text = user.uid;
-                const fallbackCopy = (text) => { const textArea = document.createElement("textarea"); textArea.value = text; textArea.style.position = "fixed"; textArea.style.left = "-9999px"; textArea.style.top = "0"; document.body.appendChild(textArea); textArea.focus(); textArea.select(); try { document.execCommand('copy'); alert("IDコピー: " + text); } catch (err) { console.error(err); alert("失敗"); } document.body.removeChild(textArea); };
+                const fallbackCopy = (text) => { const textArea = document.createElement("textarea"); textArea.value = text; textArea.style.position = "fixed"; textArea.style.left = "-9999px"; document.body.appendChild(textArea); textArea.focus(); textArea.select(); try { document.execCommand('copy'); alert("IDコピー: " + text); } catch (err) { console.error(err); alert("失敗"); } document.body.removeChild(textArea); };
                 if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(() => alert("IDコピー: " + text)).catch(() => fallbackCopy(text)); } else { fallbackCopy(text); }
             };
 
-            const handleDeleteArticle = async (article) => {
-                if (!article) return;
-                const canDelete = myRole === 'owner' || myRole === 'admin';
-                if (!canDelete) { alert("削除権限がありません（管理者のみ）"); return; }
-                if (!confirm(`本当に「${article.title}」を削除しますか？\nこの操作は取り消せません。`)) return;
-
-                const { deleteDoc, doc } = window.firebaseModules;
-                try {
-                    await deleteDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles', article.id));
-                    // If we are currently viewing this article, close it or go back
-                    if (selectedArticle && selectedArticle.id === article.id) {
-                        setSelectedArticle(null);
-                        setViewMode('timeline_large');
-                    }
-                } catch (e) { alert("削除失敗: " + e.message); }
-            };
-
-            const handleDuplicateArticle = (article) => {
-                if (!article) return;
-                if (!['owner', 'editor', 'admin'].includes(myRole)) { alert("作成権限がありません"); return; }
-
-                const newTitle = article.title + " (複製)";
-                const duplicated = {
-                    ...article,
-                    title: newTitle,
-                    id: null,
-                    isApproved: false,
-                    createdAt: null,
-                    updatedAt: null,
-                    createdBy: null,
-                    updatedBy: null
-                };
-
-                // Use existing startEditingArticle logic but override state with duplicated data
-                setFormData({
-                    ...createEmptyArticle(),
-                    ...duplicated,
-                    locations: duplicated.locations || [],
-                    period: duplicated.period || { start: '', end: '' },
-                    lat: duplicated.lat || null,
-                    lng: duplicated.lng || null
-                });
-                setStats(duplicated.stats || []);
-                setTagInput((duplicated.tags || []).join(','));
-                setViewMode('edit');
-            };
-
-            // 匿名ログインを自動実行（閲覧のみ可能）
-            React.useEffect(() => {
-                if (!user && !loading && auth) {
-                    const { signInAnonymously } = window.firebaseModules;
-                    signInAnonymously(auth).catch(err => {
-                        console.error('匿名ログイン失敗:', err);
-                        setAuthError('自動ログインに失敗しました: ' + err.message);
-                    });
-                }
-            }, [user, loading, auth]);
-
             if (loading) return <div className="h-screen flex items-center justify-center text-indigo-600 font-bold animate-pulse">Loading...</div>;
-            if (!user) return <div className="h-screen flex items-center justify-center text-indigo-600 font-bold">接続中...</div>;
+            if (!user) return (
+                <div className="min-h-screen flex items-center justify-center bg-indigo-900 p-4 relative">
+                    {showConfigEditor && <ConfigEditor currentConfig={activeConfig} currentAppId={appContextId} onSave={handleConfigSave} onCancel={() => setShowConfigEditor(false)} />}
+                    <div className="bg-white p-8 rounded-lg shadow-2xl max-w-md w-full relative z-10">
+                        <div className="absolute top-4 right-4"><button onClick={() => setShowConfigEditor(true)} className="text-xs flex items-center gap-1 text-gray-400 hover:text-indigo-600"><Icon name="settings" size={14} /> 設定修正</button></div>
+                        <h1 className="text-3xl font-bold text-center mb-2 text-indigo-900 serif">WorldWeaver</h1>
+                        <div className="text-center text-xs text-gray-400 mb-6 font-mono">Data ID: {appContextId}</div>
+                        {authError && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-3 mb-6 text-xs whitespace-pre-wrap rounded">{authError}</div>}
+                        <div className="flex gap-2 mb-6 bg-gray-100 p-1 rounded"><button onClick={() => setAuthMode('login')} className={`flex-1 py-2 rounded text-sm font-bold ${authMode === 'login' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>ログイン</button><button onClick={() => setAuthMode('register')} className={`flex-1 py-2 rounded text-sm font-bold ${authMode === 'register' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>新規登録</button></div>
+                        <div className="space-y-4">
+                            <input type="text" placeholder="ユーザー名" className="w-full border p-2 rounded bg-gray-50" value={authForm.username} onChange={e => setAuthForm({ ...authForm, username: e.target.value })} />
+                            <input type="password" placeholder="パスワード" className="w-full border p-2 rounded bg-gray-50" value={authForm.password} onChange={e => setAuthForm({ ...authForm, password: e.target.value })} />
+                            <button onClick={handleAuth} className="w-full bg-indigo-600 text-white py-3 rounded font-bold hover:bg-indigo-700 transition shadow-lg">{authMode === 'login' ? '入場' : '登録'}</button>
+                        </div>
+                    </div>
+                </div>
+            );
 
             if (viewMode === 'world_select') return (
                 <div className="min-h-screen bg-gray-100 p-6">
@@ -3312,11 +2710,7 @@
                             <div className="flex gap-2 items-center">
                                 <span className="text-xs text-gray-400 font-mono">{appContextId}</span>
                                 <button onClick={() => setShowConfigEditor(true)} className="text-xs text-gray-500 hover:text-indigo-600"><Icon name="settings" size={14} /></button>
-                                {user?.isAnonymous ? (
-                                    <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="text-sm text-indigo-600 font-bold hover:underline ml-2">ログイン</button>
-                                ) : (
-                                    <button onClick={() => window.firebaseModules.signOut(auth)} className="text-sm text-red-500 hover:underline ml-2">ログアウト</button>
-                                )}
+                                <button onClick={() => window.firebaseModules.signOut(auth)} className="text-sm text-red-500 hover:underline ml-2">ログアウト</button>
                             </div>
                         </div>
                         {showConfigEditor && <ConfigEditor currentConfig={activeConfig} currentAppId={appContextId} onSave={handleConfigSave} onCancel={() => setShowConfigEditor(false)} />}
@@ -3333,68 +2727,32 @@
             return (
                 <div className="flex h-screen overflow-hidden bg-gray-100">
                     <div className="flex-1 flex flex-col relative h-full overflow-hidden">
-                        <header className="bg-white shadow-sm px-2 md:px-4 py-2 flex flex-wrap gap-2 items-center justify-between z-10 border-b shrink-0">
+                        <header className="bg-white shadow-sm px-4 py-2 flex items-center justify-between z-10 border-b">
                             <div className="flex items-center gap-4">
-                                <button onClick={() => { setWorldId(null); setViewMode('world_select'); }} className="p-2 -ml-2 text-gray-400 hover:text-indigo-600 rounded-full hover:bg-gray-100 transition-colors" title="メニューに戻る">
-                                    <Icon name="home" size={20} />
-                                </button>
                                 <div className="hidden md:flex flex-col text-xs text-gray-500">
                                     <span className="text-sm font-bold text-gray-800">{worldData?.name}</span>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-[11px] cursor-pointer hover:text-indigo-600" onClick={copyMyId} title="IDコピー">{user?.displayName || 'Guest'} (ID)</span>
-                                        {user?.isAnonymous ? (
-                                            <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100 hover:bg-indigo-100 font-bold">ログイン</button>
-                                        ) : (
-                                            <button onClick={() => window.firebaseModules.signOut(auth)} className="text-[10px] bg-red-50 text-red-500 px-1.5 py-0.5 rounded border border-red-100 hover:bg-red-100 font-bold">ログアウト</button>
-                                        )}
-                                    </div>
+                                    <span className="text-[11px] cursor-pointer hover:text-indigo-600" onClick={copyMyId} title="IDコピー">{user?.displayName} (ID)</span>
                                 </div>
-                                <div className="flex-1 md:flex-none flex bg-gray-100 p-1 rounded-lg overflow-x-auto no-scrollbar min-w-0 max-w-full md:max-w-[60vw]">{VIEW_TABS.map(tab => (<button key={tab.key} onClick={() => setViewMode(tab.key)} className={`px-3 py-1.5 rounded text-sm flex items-center gap-1 whitespace-nowrap ${viewMode === tab.key ? 'bg-white shadow text-indigo-600 font-bold' : 'text-gray-500'}`}><Icon name={tab.icon} size={16} /> {tab.label}</button>))}</div>
+                                <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">{VIEW_TABS.map(tab => (<button key={tab.key} onClick={() => setViewMode(tab.key)} className={`px-3 py-1.5 rounded text-sm flex items-center gap-1 ${viewMode === tab.key ? 'bg-white shadow text-indigo-600 font-bold' : 'text-gray-500'}`}><Icon name={tab.icon} size={16} /> {tab.label}</button>))}</div>
                             </div>
-                            <div className="flex items-center gap-2 md:gap-4">
-                                {(viewMode === 'timeline_large' || viewMode === 'list' || viewMode === 'story' || viewMode === 'map') && (
-                                    <button onClick={() => setTimelineFilters(prev => ({ ...prev, onlyApproved: !prev.onlyApproved, onlyUnapproved: false }))} className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${timelineFilters.onlyApproved ? 'bg-emerald-600 text-white font-bold' : 'bg-gray-200 text-gray-500 hover:bg-gray-300'}`} title="承認済み記事のみ表示">
+                            <div className="flex items-center gap-4">
+                                {(viewMode === 'timeline_large' || viewMode === 'list' || viewMode === 'map') && (
+                                    <button onClick={() => setTimelineFilters(prev => ({ ...prev, onlyApproved: !prev.onlyApproved }))} className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${timelineFilters.onlyApproved ? 'bg-emerald-600 text-white font-bold' : 'bg-gray-200 text-gray-500 hover:bg-gray-300'}`} title="承認済み記事のみ表示">
                                         <Icon name="check-circle" size={14} />
                                         <span className="hidden sm:inline">承認済のみ</span>
                                     </button>
                                 )}
-                                <div className="hidden lg:flex items-center text-[11px] text-gray-400"><Icon name="filter" size={12} className="mr-1" /> {timelineSummary} {timelineFilters.onlyApproved && <span className="text-emerald-600 font-bold ml-1">(ON)</span>}</div>
-                                <div className="flex items-center gap-1 bg-gray-100 rounded px-1 ml-2">
-                                    <button onClick={() => setUiScale(s => Math.max(50, s - 10))} className="p-1 hover:text-indigo-600 text-gray-500" title="縮小"><Icon name="minus" size={12} /></button>
-                                    <span className="text-[10px] w-8 text-center text-gray-500 font-mono">{uiScale}%</span>
-                                    <button onClick={() => setUiScale(s => Math.min(200, s + 10))} className="p-1 hover:text-indigo-600 text-gray-500" title="拡大"><Icon name="plus" size={12} /></button>
-                                </div>
-                                {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}
-                                <button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> 記事作成</button>
-                            </div>
+                                <div className="hidden lg:flex items-center text-[11px] text-gray-400"><Icon name="filter" size={12} className="mr-1" /> {timelineSummary} {timelineFilters.onlyApproved && <span className="text-emerald-600 font-bold ml-1">(ON)</span>}</div>{(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}{['owner', 'editor', 'admin'].includes(myRole) && <button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> 作成</button>}</div>
                         </header>
-                        <div className={`flex-1 relative bg-slate-50 w-full ${isFixedView ? 'overflow-hidden' : 'overflow-y-auto'}`}><div style={viewMode === 'map' ? {} : scaleStyle}>
-                            {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onlyUnapproved={timelineFilters.onlyUnapproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
-                            {viewMode === 'story' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'story')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onlyUnapproved={timelineFilters.onlyUnapproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} filterFn={(a) => a.type === 'story' || (a.tags && (a.tags.includes('物語') || a.tags.includes('小説') || a.tags.includes('設定書')))} />}
+                        <div className="flex-1 overflow-y-auto relative bg-slate-50">
+                            {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
                             {viewMode === 'map' && <div className="absolute inset-0 flex flex-col">
-                                <div className="p-3 z-10 bg-white/90 border-b flex items-center gap-4">
-                                    <input className="flex-1 p-2 rounded border text-sm max-w-sm" placeholder="地図検索 (タイトル/本文/タグ)..." value={mapTabQuery || ''} onChange={e => setMapTabQuery(e.target.value)} />
-                                    <div className="flex items-center gap-2 border-l pl-4">
-                                        <span className="text-xs font-bold text-gray-500">重要度:</span>
-                                        <div className="flex bg-gray-100 rounded p-0.5">
-                                            {[1, 2, 3, 4, 5].map(v => (
-                                                <button key={v} onClick={() => setMapTabImportance(mapTabImportance === v ? 0 : v)} className={`px-2 py-0.5 text-xs rounded ${mapTabImportance === v ? 'bg-indigo-600 text-white font-bold' : mapTabImportance > v ? 'text-indigo-600' : 'text-gray-400'}`}>
-                                                    {v}
-                                                </button>
-                                            ))}
-                                            <span className="text-[10px] items-center flex px-1 text-gray-400">{mapTabImportance ? '以上' : '指定なし'}</span>
-                                        </div>
-                                    </div>
+                                <div className="p-3 z-10 bg-white/90 border-b">
+                                    <input className="w-80 p-2 rounded border text-sm" placeholder="地図検索 (タイトル/本文/タグ)..." value={mapTabQuery || ''} onChange={e => setMapTabQuery(e.target.value)} />
                                 </div>
-                                <div className="flex-1 relative"><MapView articles={articles} worldData={worldData} isEditing={false} externalQuery={mapTabQuery} onExternalQueryChange={v => setMapTabQuery(v)} highlightArticleId={selectedArticle?.id} minImportance={mapTabImportance} onSelectArticle={a => {
-                                    // 年代がある記事は年表ビューで拡大表示、年代なしは単独の拡大記事表示
+                                <div className="flex-1 relative"><MapView articles={articles} worldData={worldData} isEditing={false} externalQuery={mapTabQuery} onExternalQueryChange={v => setMapTabQuery(v)} highlightArticleId={selectedArticle?.id} onSelectArticle={a => {
                                     const y = getArticleYear(a);
-                                    const hasYear = y && y !== 0 && !a.noYear;
-
-                                    // 記事の年代状態に応じてフィルタを調整
-                                    setTimelineFilters(prev => ({ ...prev, excludeNoYear: hasYear }));
-
-                                    if (hasYear) {
+                                    if (y && y !== 0 && !a.noYear) {
                                         setSelectedArticle(a);
                                         setViewMode('timeline_large');
                                     } else {
@@ -3402,44 +2760,19 @@
                                     }
                                 }} appContextId={appContextId} /></div>
                             </div>}
-                            {viewMode === 'timeline_large' && <LargeTimelineView
-                                articles={filteredTimelineArticles}
-                                onSelectArticle={setSelectedArticle}
-                                onEditArticle={startEditingArticle}
-                                onDeleteArticle={handleDeleteArticle}
-                                onDuplicateArticle={handleDuplicateArticle}
-                                focusedArticle={selectedArticle}
-                                onFocusChange={setSelectedArticle}
-                                allArticles={articles}
-                                searchState={timelineFilters}
-                                onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))}
-                                onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true, onlyApproved: false })}
-                                worldData={worldData}
-                                appContextId={appContextId}
-                                myRole={myRole}
-                                onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { openDetailView(art, 'timeline_large'); } } else { setViewMode('timeline_noyear'); } }}
-                                onOpenTagArticle={openTagArticle}
-                                tagArticleValue={tagArticleInput}
-                                onTagArticleValueChange={setTagArticleInput}
-                                members={members}
-                                onAddMember={handleAddMember}
-                            />}
+                            {viewMode === 'timeline_large' && <LargeTimelineView articles={filteredTimelineArticles} onSelectArticle={setSelectedArticle} onEditArticle={startEditingArticle} focusedArticle={selectedArticle} onFocusChange={setSelectedArticle} allArticles={articles} searchState={timelineFilters} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true })} worldData={worldData} appContextId={appContextId} myRole={myRole} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { setSelectedArticle(art); setViewMode('single_article'); } } else { setViewMode('timeline_noyear'); } }} onOpenTagArticle={openTagArticle} tagArticleValue={tagArticleInput} onTagArticleValueChange={setTagArticleInput} />}
                             {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} />}
                             {viewMode === 'timeline_noyear' && (
-                                <div className="absolute inset-0 overflow-auto p-6 bg-slate-900">
+                                <div className="absolute inset-0 overflow-auto p-6 bg-white">
                                     <div className="flex items-center justify-between mb-4">
-                                        <h2 className="text-xl font-bold text-white">年代未設定の記事一覧</h2>
-                                        <div className="flex gap-2"><button onClick={() => setViewMode('timeline_large')} className="px-3 py-1 rounded bg-slate-700 text-white hover:bg-slate-600">年表に戻る</button><button onClick={() => { setPreviousViewMode('timeline_noyear'); setViewMode('edit'); }} className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700">新規作成</button></div>
+                                        <h2 className="text-xl font-bold">年代未設定の記事一覧</h2>
+                                        <div className="flex gap-2"><button onClick={() => setViewMode('timeline_large')} className="px-3 py-1 rounded bg-gray-200">年表に戻る</button><button onClick={() => setViewMode('edit')} className="px-3 py-1 rounded bg-indigo-600 text-white">新規作成</button></div>
                                     </div>
-                                    <div className="space-y-4">
-                                        {articles.filter(a => {
-                                            if (a.noYear === true) return true;
-                                            const y = Math.floor(getArticleYear(a));
-                                            return !y || Number(y) === 0;
-                                        }).map(a => (
-                                            <div key={a.id} className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 hover:bg-slate-800 transition">
-                                                <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-xl text-white" dangerouslySetInnerHTML={{ __html: applyRuby(escapeHtml(a.title)) }}></h3><span className="text-xs text-slate-400 font-mono">{a.dateStr || ''}</span></div>
-                                                <div className="text-sm text-slate-300 mb-4 rich-editor leading-relaxed" onClick={(e) => {
+                                    <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+                                        {articles.filter(a => { const y = Math.floor(getArticleYear(a)); return !y || Number(y) === 0; }).map(a => (
+                                            <div key={a.id} className="bg-white border rounded-xl p-4">
+                                                <div className="flex items-center justify-between"><h3 className="font-bold text-lg truncate">{a.title}</h3><span className="text-xs text-gray-400 font-mono">{a.dateStr || ''}</span></div>
+                                                <div className="text-sm text-gray-600 mt-2 rich-editor" onClick={(e) => {
                                                     const link = e.target.closest && e.target.closest('.wiki-link');
                                                     if (link) {
                                                         e.preventDefault(); e.stopPropagation();
@@ -3448,7 +2781,9 @@
                                                         if (id) {
                                                             const target = articleIndex.get(id);
                                                             if (target) {
-                                                                openDetailView(target, 'timeline_noyear');
+                                                                setSelectedArticle(target);
+                                                                setViewMode('single_article');
+                                                                setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true });
                                                             } else {
                                                                 alert('リンク先の記事が見つかりません');
                                                             }
@@ -3458,7 +2793,9 @@
                                                             } else {
                                                                 const target = articles.find(x => (x.title || '').trim() === wikiTitle.trim());
                                                                 if (target) {
-                                                                    openDetailView(target, 'timeline_noyear');
+                                                                    setSelectedArticle(target);
+                                                                    setViewMode('single_article');
+                                                                    setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true });
                                                                 } else {
                                                                     alert('リンク先の記事が見つかりません');
                                                                 }
@@ -3466,35 +2803,29 @@
                                                         }
                                                     }
                                                 }} dangerouslySetInnerHTML={{ __html: transformContent(a.contentHtml || '') }}></div>
-                                                <div className="flex justify-end gap-2 border-t border-slate-700 pt-3">
-                                                    <button onClick={() => { startEditingArticle(a); }} className="px-3 py-1 rounded bg-slate-700 text-white text-sm hover:bg-slate-600">編集</button>
-                                                    <button onClick={() => { handleDuplicateArticle(a); }} className="px-3 py-1 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-700">複製</button>
-                                                    {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => { handleDeleteArticle(a); }} className="px-3 py-1 rounded bg-red-600 text-white text-sm hover:bg-red-700">削除</button>}
-                                                </div>
+                                                <div className="mt-4 flex justify-end gap-2"><button onClick={() => { startEditingArticle(a); }} className="px-3 py-1 rounded border text-sm">編集</button></div>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
                             )}
                             {viewMode === 'single_article' && selectedArticle && (
-                                <div className="absolute inset-0 bg-slate-900 overflow-y-auto z-50 p-0">
-                                    <div className="sticky top-0 bg-slate-900/95 backdrop-blur border-b border-slate-700 p-4 flex justify-between items-center z-50 shadow-lg">
+                                <div className="absolute inset-0 bg-white overflow-y-auto z-50 p-0">
+                                    <div className="sticky top-0 bg-white/90 backdrop-blur border-b p-4 flex justify-between items-center z-50 shadow-sm">
                                         <div className="flex items-center gap-4">
-                                            <button onClick={() => setViewMode(navBackView || 'timeline_large')} className="flex items-center gap-1 text-sm text-slate-400 hover:text-white"><Icon name="arrow-left" size={16} /> 一覧に戻る</button>
-                                            <h2 className="font-bold text-lg truncate max-w-xl flex items-center gap-2 text-white">
-                                                <span dangerouslySetInnerHTML={{ __html: applyRuby(escapeHtml(selectedArticle.title)) }}></span>
-                                                {selectedArticle.isApproved && <span className="bg-emerald-600 text-white text-xs px-2 py-0.5 rounded flex items-center gap-1"><Icon name="check" size={12} /> 承認済</span>}
+                                            <button onClick={() => setViewMode('timeline_noyear')} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800"><Icon name="arrow-left" size={16} /> 一覧に戻る</button>
+                                            <h2 className="font-bold text-lg truncate max-w-xl flex items-center gap-2">
+                                                {selectedArticle.title}
+                                                {selectedArticle.isApproved && <span className="bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5 rounded flex items-center gap-1"><Icon name="check" size={12} /> 承認済</span>}
                                             </h2>
                                         </div>
                                         <div className="flex gap-2">
                                             <button onClick={() => startEditingArticle(selectedArticle)} className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-bold rounded shadow-sm hover:bg-indigo-700">編集</button>
-                                            <button onClick={() => handleDuplicateArticle(selectedArticle)} className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-bold rounded shadow-sm hover:bg-emerald-700">複製</button>
-                                            {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => handleDeleteArticle(selectedArticle)} className="px-4 py-1.5 bg-red-600 text-white text-sm font-bold rounded shadow-sm hover:bg-red-700">削除</button>}
                                         </div>
                                     </div>
                                     <div className="max-w-none p-8 md:p-12 mx-auto">
                                         {/* Full width rendering container without constraints for complex tables */}
-                                        <div className="prose prose-xl max-w-none prose-invert" style={{ color: '#e2e8f0' }} dangerouslySetInnerHTML={{ __html: transformContent(selectedArticle.contentHtml || '') }} onClick={(e) => {
+                                        <div className="prose prose-xl max-w-none" dangerouslySetInnerHTML={{ __html: transformContent(selectedArticle.contentHtml || '') }} onClick={(e) => {
                                             const link = e.target.closest && e.target.closest('.wiki-link');
                                             if (link) {
                                                 e.preventDefault(); e.stopPropagation();
@@ -3522,23 +2853,12 @@
                             )}
                             {viewMode === 'edit' && (
                                 <div className="absolute inset-0 flex flex-col bg-white z-50">
-                                    <div className="border-b px-6 py-3 flex justify-between items-center bg-gray-50">
-                                        <h2 className="font-bold text-gray-700 flex items-center gap-2">
-                                            {canIApprove ? '編集' : '編集リクエスト'}
-                                            {!canIApprove && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded">※承認待ちとなります</span>}
-                                        </h2>
-                                        <div className="flex gap-2">
-                                            <button onClick={() => setViewMode(previousViewMode || 'timeline_large')} className="px-4 py-2 rounded bg-gray-200 text-sm">キャンセル</button>
-                                            <button onClick={handleSaveArticle} className={`px-6 py-2 rounded text-white font-bold text-sm ${canIApprove ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
-                                                {canIApprove ? '保存' : '申請する'}
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-                                        <div className="flex-1 p-4 md:p-6 overflow-y-auto flex flex-col gap-4">
-                                            <input className="w-full text-xl md:text-3xl font-bold p-2 border-b outline-none serif" placeholder="タイトル" value={formData.title} onChange={e => setFormData(prev => ({ ...prev, title: e.target.value }))} />
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (開始) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/01/01-00:00:00" value={formData.period?.start || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), start: e.target.value } }))} /></div><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (終了) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/12/31-23:59:59" value={formData.period?.end || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), end: e.target.value } }))} /></div></div>
-                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="border-b px-6 py-3 flex justify-between items-center bg-gray-50"><h2 className="font-bold text-gray-700">編集</h2><div className="flex gap-2"><button onClick={() => setViewMode('timeline_large')} className="px-4 py-2 rounded bg-gray-200 text-sm">キャンセル</button><button onClick={handleSaveArticle} className="px-6 py-2 rounded bg-indigo-600 text-white font-bold text-sm">保存</button></div></div>
+                                    <div className="flex-1 flex overflow-hidden">
+                                        <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-4">
+                                            <input className="w-full text-3xl font-bold p-2 border-b outline-none serif" placeholder="タイトル" value={formData.title} onChange={e => setFormData(prev => ({ ...prev, title: e.target.value }))} />
+                                            <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (開始) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/01/01-00:00:00" value={formData.period?.start || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), start: e.target.value } }))} /></div><div><label className="text-xs font-bold text-gray-500 block mb-1">期間 (終了) (yyyy/mm/dd-hh:mm:ss)</label><input type="text" className="w-full border p-2 rounded" placeholder="2023/12/31-23:59:59" value={formData.period?.end || ''} onChange={e => setFormData(prev => ({ ...prev, period: { ...(prev.period || {}), end: e.target.value } }))} /></div></div>
+                                            <div className="grid grid-cols-3 gap-4">
                                                 <div>
                                                     <label className="text-xs font-bold text-gray-500 block mb-1">種別</label>
                                                     <select className="w-full border p-2 rounded" value={formData.type} onChange={e => setFormData(prev => ({ ...prev, type: e.target.value }))}>
@@ -3552,16 +2872,6 @@
                                                 <div>
                                                     <label className="text-xs font-bold text-gray-500 block mb-1">日時 (yyyy/mm/dd-hh:mm:ss)</label>
                                                     <input className="w-full border p-2 rounded" placeholder="2023/11/20-14:00:00" value={formData.dateStr || ''} onChange={e => setFormData(prev => ({ ...prev, dateStr: e.target.value }))} />
-                                                </div>
-                                            </div>
-                                            <div className="my-2">
-                                                <label className="text-xs font-bold text-gray-500 block mb-1">重要度 (1-5)</label>
-                                                <div className="flex gap-1">
-                                                    {[1, 2, 3, 4, 5].map(v => (
-                                                        <button key={v} onClick={() => setFormData(prev => ({ ...prev, importance: v }))} className={`px-3 py-1 rounded text-sm font-bold border ${formData.importance === v ? 'bg-yellow-100 text-yellow-600 border-yellow-300' : 'bg-gray-50 text-gray-400'}`}>
-                                                            {v}
-                                                        </button>
-                                                    ))}
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-4">
@@ -3579,26 +2889,10 @@
                                                     (承認権限がありません)
                                                 </div>
                                             )}
-                                            <div className="flex flex-col md:flex-row gap-2">
+                                            <div className="flex gap-2">
                                                 <div className="flex-1"><LocationsEditor locations={formData.locations} onChange={l => setFormData(prev => ({ ...prev, locations: l }))} /></div>
-                                                <div className="w-full md:w-1/3 space-y-2">
-                                                    <ArticleLinkInserter articles={articles} onInsert={(a) => {
-                                                        if (formData._editorMode === 'html' && htmlTextareaRef.current) {
-                                                            const ta = htmlTextareaRef.current;
-                                                            const start = ta.selectionStart;
-                                                            const end = ta.selectionEnd;
-                                                            const text = formData.contentHtml || '';
-                                                            const wikiLink = `[[${a.title}|${a.id}]]`;
-                                                            const newText = text.substring(0, start) + wikiLink + text.substring(end);
-                                                            setFormData(prev => ({ ...prev, contentHtml: newText }));
-                                                            setTimeout(() => {
-                                                                ta.focus();
-                                                                ta.setSelectionRange(start + wikiLink.length, start + wikiLink.length);
-                                                            }, 0);
-                                                        } else if (editorRef.current) {
-                                                            editorRef.current.insertLink(a);
-                                                        }
-                                                    }} />
+                                                <div className="w-1/3 space-y-2">
+                                                    <ArticleLinkInserter articles={articles} onInsert={(a) => { if (editorRef.current) editorRef.current.insertLink(a); }} />
                                                     <div className="text-xs text-gray-500">※文字色はエディタのカラー機能で変更できます</div>
                                                 </div>
                                             </div>
@@ -3662,7 +2956,7 @@
                                                 </>}
                                             </div>
                                         </div>
-                                        <div className="w-full lg:w-80 h-72 lg:h-auto border-t lg:border-t-0 lg:border-l bg-gray-50 flex flex-col overflow-y-auto shrink-0">
+                                        <div className="w-80 border-l bg-gray-50 flex flex-col overflow-y-auto">
                                             <div className="h-52 relative border-b">
                                                 <MapView
                                                     articles={previewArticles}
@@ -3684,37 +2978,8 @@
                                     </div>
                                 </div>
                             )}
-                            {showMemberManager && <MemberManager db={db} worldId={worldId} appContextId={appContextId} onClose={() => setShowMemberManager(false)} members={members} onAddMember={handleAddMember} />}
-                            {showAuthModal && (
-                                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[10000] p-4 backdrop-blur-sm">
-                                    <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm animate-[fadeIn_0.2s_ease-out] relative">
-                                        <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><Icon name="x" size={20} /></button>
-                                        <div className="text-center mb-6">
-                                            <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="user" size={32} /></div>
-                                            <h3 className="text-xl font-bold text-gray-900">{authMode === 'login' ? 'ログイン' : '新規登録'}</h3>
-                                            <p className="text-sm text-gray-500 mt-1">{authMode === 'login' ? 'アカウントにログインしてください' : '新しいアカウントを作成します'}</p>
-                                        </div>
-                                        <div className="space-y-4">
-                                            <div>
-                                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">ユーザー名</label>
-                                                <input className="w-full border-2 border-gray-100 p-3 rounded-xl mt-1 focus:border-indigo-500 outline-none transition-colors" placeholder="Username" value={authForm.username} onChange={e => setAuthForm({ ...authForm, username: e.target.value })} />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">パスワード</label>
-                                                <input className="w-full border-2 border-gray-100 p-3 rounded-xl mt-1 focus:border-indigo-500 outline-none transition-colors" type="password" placeholder="Password" value={authForm.password} onChange={e => setAuthForm({ ...authForm, password: e.target.value })} />
-                                            </div>
-                                            {authError && <div className="text-xs text-red-500 bg-red-50 p-2 rounded-lg border border-red-100">{authError}</div>}
-                                            <button onClick={handleAuth} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-[0.98] mt-2">{authMode === 'login' ? 'ログイン' : '作成'}</button>
-                                            <div className="text-center pt-4 border-t border-gray-50">
-                                                <button onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError(null); }} className="text-sm text-indigo-600 font-bold hover:underline">
-                                                    {authMode === 'login' ? 'アカウントをお持ちでない方はこちら' : '既にアカウントをお持ちの方はこちら'}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                            {showRegionRuleEditor && <RegionRuleEditor rules={regionRules} worldData={worldData} onSave={(r) => { handleSaveRegionRules(r); setShowRegionRuleEditor(false); }} onClose={() => setShowRegionRuleEditor(false)} />}
+                            {showMemberManager && <MemberManager db={db} worldId={worldId} appContextId={appContextId} onClose={() => setShowMemberManager(false)} />}
+                            {showRegionRuleEditor && <RegionRuleEditor rules={regionRules || []} onSave={(r) => { setRegionRules(r); setShowRegionRuleEditor(false); }} onClose={() => setShowRegionRuleEditor(false)} />}
                             {showAdminPanel && (
                                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
                                     <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
@@ -3723,17 +2988,6 @@
                                             <button onClick={() => setShowAdminPanel(false)} className="text-gray-500"><Icon name="x" size={18} /></button>
                                         </div>
                                         <div className="space-y-4">
-                                            <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 p-3 rounded">
-                                                <div>
-                                                    <div className="text-sm font-bold text-yellow-800">未承認の記事 (申請)</div>
-                                                    <div className="text-xs text-yellow-600">承認待ち: {articles.filter(a => !a.isApproved).length}件 / 著者をメンバーに招待できます。</div>
-                                                </div>
-                                                <button onClick={() => {
-                                                    setTimelineFilters(prev => ({ ...prev, onlyUnapproved: true, onlyApproved: false }));
-                                                    setViewMode('list');
-                                                    setShowAdminPanel(false);
-                                                }} className="px-3 py-1.5 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700">確認する</button>
-                                            </div>
                                             <div className="flex items-center justify-between">
                                                 <div>
                                                     <div className="text-sm font-bold">メンバー管理</div>
@@ -3766,8 +3020,7 @@
                                                     <div className="text-sm font-bold">地域タグ自動付与</div>
                                                     <div className="text-xs text-gray-500">座標に応じたタグ割り当てルールを設定します</div>
                                                 </div>
-                                                <div className="flex gap-2">
-                                                    <button onClick={handleReapplyRegionTags} className="px-3 py-1.5 bg-gray-500 text-white rounded text-sm hover:bg-gray-600" title="現在のルールに基づいてタグを再計算・追加します">再適用</button>
+                                                <div>
                                                     <button onClick={() => { setShowRegionRuleEditor(true); setShowAdminPanel(false); }} className="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">編集</button>
                                                 </div>
                                             </div>
@@ -3792,7 +3045,7 @@
                                     </div>
                                 </div>
                             )}
-                        </div></div>
+                        </div>
                     </div >
                 </div >
             );

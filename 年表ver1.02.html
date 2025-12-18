@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>英覇歴代記 Timeline Wiki</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+body { font-family: 'Helvetica Neue', Arial, sans-serif; }
+.custom-scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #888; }
+</style>
+</head>
+<body class="bg-[#f0f2f5] text-gray-800">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+
+const DEFAULT_YEAR = 1825;
+const AD_OFFSET = 110;
+
+const LOCATIONS = {
+    'allugeberno': { label: 'アリュージベルノ大陸', color: '#92400e', order: 1 },
+    'grankleberno': { label: 'グランクルベルノ大陸', color: '#92400e', order: 2 },
+    'fiageberno': { label: 'フィアージベルノ大陸', color: '#92400e', order: 3 },
+    'seabed': { label: '海底', color: '#1e3a8a', order: 4 },
+    'unknown': { label: 'その他・不明', color: '#4b5563', order: 99 }
+};
+
+const NATION_RANKS = {
+    'world_government': { label: '世界政府', order: 1, color: '#000000' },
+    'super_power': { label: '大列強', order: 2, color: '#7f1d1d' },
+    'great_power': { label: '列強', order: 3, color: '#c2410c' },
+    'major_power': { label: '大国', order: 4, color: '#15803d' },
+    'regional_power': { label: '地域大国', order: 5, color: '#0f766e' },
+    'minor_power': { label: '中小国', order: 6, color: '#374151' },
+    'city_state': { label: '都市国家', order: 7, color: '#4b5563' }
+};
+
+const ERA_EVENT_TYPES = {
+    'none': { label: 'なし', icon: '', relationship: null },
+    'regime_change': { label: '政体の変更', icon: '🏛️', relationship: null, counter: null },
+    'foundation': { label: '建国・成立', icon: '✨', relationship: null, counter: null },
+    'independence': { label: 'より独立', icon: '🚩', relationship: null, counter: 'lose_independence' },
+    'splinter': { label: 'より分裂して成立', icon: '⚡', relationship: null, counter: 'lose_splinter' },
+    'unification': { label: 'を統合して成立', icon: '🤝', relationship: 'child', counter: 'merger' },
+    'foundation_puppet': { label: '傀儡国として成立', icon: '♟️', relationship: 'parent', counter: 'puppet_found' },
+    'puppet_found': { label: 'を傀儡として建国', icon: '♟️', relationship: 'child', counter: 'foundation_puppet' },
+    'annexation': { label: 'を併合', icon: '➕', relationship: 'child', counter: 'annexed_by' },
+    'partition': { label: 'を分割統治', icon: '🍰', relationship: 'child', counter: 'partitioned_by' },
+    'puppet': { label: 'を傀儡化', icon: '🧸', relationship: 'child', counter: 'be_puppet' },
+    'be_puppet': { label: 'の傀儡になる', icon: '⛓️', relationship: 'parent', counter: 'puppet' },
+    'annexed_by': { label: 'に併合される', icon: '🏳️', relationship: 'parent', counter: 'annexation' },
+    'partitioned_by': { label: 'により分割される', icon: '🧩', relationship: 'parent', counter: 'partition' },
+    'merger': { label: 'に吸収合併される', icon: '🔗', relationship: 'parent', counter: 'unification' },
+    'dissolution': { label: '分裂・解体して消滅', icon: '💥', relationship: null, counter: 'splinter' },
+    'collapse': { label: '崩壊・滅亡', icon: '💀', relationship: null, counter: null },
+    'lose_independence': { label: 'が独立', icon: '👋', relationship: 'null', counter: 'independence' },
+    'lose_splinter': { label: 'が分裂', icon: '💔', relationship: 'null', counter: 'splinter' },
+};
+
+const importanceLevels = {
+    1: { label: '小事', scale: 'scale-95', badge: 'bg-gray-200 text-gray-700', bg: 'bg-gray-50', color: 'border-gray-200' },
+    2: { label: '一般', scale: 'scale-100', badge: 'bg-gray-300 text-gray-800', bg: 'bg-white', color: 'border-gray-300' },
+    3: { label: '重要', scale: 'scale-105', badge: 'bg-blue-100 text-blue-800', bg: 'bg-blue-50', color: 'border-blue-400' },
+    4: { label: '激動', scale: 'scale-110', badge: 'bg-purple-100 text-purple-800', bg: 'bg-purple-50', color: 'border-purple-500' },
+    5: { label: '伝説', scale: 'scale-110 md:scale-115', badge: 'bg-yellow-100 text-yellow-800', bg: 'bg-yellow-50', color: 'border-yellow-500 border-4' },
+    6: { label: '神話', scale: 'scale-110 md:scale-115', badge: 'bg-rose-100 text-rose-800', bg: 'bg-rose-50', color: 'border-rose-500 border-4' },
+};
+
+const CUSTOM_MONTHS = {1:'創聖月',2:'祈律月',3:'啓光月',4:'天詠月',5:'神華月',6:'洗礼月',7:'熾天月',8:'炎供月',9:'聖穹月',10:'冥祀月',11:'再律月',12:'黙信月'};
+const US_STATS = [{year:1680,population:3929000,gdp:20000000000},{year:1900,population:76212000,gdp:4000000000000},{year:2000,population:281421000,gdp:1050000000000000}]; 
+
+const formatDate = (y, m, d) => `英覇暦 ${y}年` + (m ? ` ${CUSTOM_MONTHS[m]}(${m}月)` : '') + (d ? ` ${d}日` : '');
+const formatJapaneseNumber = (n, s='', short=false) => { if(!n && n!==0) return '-'; if(n===0) return '0'+s; return n.toLocaleString()+s; };
+const calculatePerCapita = (g, p) => (!p ? 0 : Math.round(g/p));
+
+const fileToBase64 = (file) => new Promise((res, rej) => {
+    const reader = new FileReader(); reader.readAsDataURL(file);
+    reader.onload = e => {
+        const img = new Image(); img.onload = () => {
+            const c = document.createElement('canvas'); let w=img.width, h=img.height;
+            if(w>h){ if(w>150){h*=150/w; w=150;} } else { if(h>150){w*=150/h; h=150;} }
+            c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h); res(c.toDataURL('image/webp',0.8));
+        }; img.src = e.target.result;
+    }; reader.onerror = rej;
+});
+const compressBase64Image = (base64) => new Promise(res => {
+    const img = new Image(); img.onload = () => {
+        const c = document.createElement('canvas'); let w=img.width, h=img.height;
+        if(w>h){ if(w>150){h*=150/w; w=150;} } else { if(h>150){w*=150/h; h=150;} }
+        c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h); res(c.toDataURL('image/webp',0.8));
+    }; img.onerror=()=>res(base64); img.src=base64;
+});
+
+const getNationInfo = (nation, year) => {
+    let info = { name: nation.name, color: nation.color, flag: nation.flag, params: nation.params || {}, isCollapsed: false, isFuture: false, eraEvent: null, eraStartYear: null, eraEndYear: null, nationStartYear: null, nationEndYear: null };
+    const sortedEras = (nation.eras || []).sort((a, b) => a.startYear - b.startYear);
+    const birthEra = sortedEras.find(e => e.event && ['foundation', 'independence', 'splinter', 'unification', 'foundation_puppet'].includes(e.event.type));
+    if (birthEra) info.nationStartYear = birthEra.startYear; else if (sortedEras.length > 0) info.nationStartYear = sortedEras[0].startYear;
+    const collapseEra = sortedEras.find(e => e.type === 'collapse' || (e.event && ['annexed_by', 'partitioned_by', 'merger', 'dissolution'].includes(e.event.type)));
+    if (collapseEra) info.nationEndYear = collapseEra.startYear;
+    if (info.nationStartYear !== null && year < info.nationStartYear) return { ...info, isFuture: true };
+    let idx = -1; for (let i = sortedEras.length - 1; i >= 0; i--) { if (sortedEras[i].startYear <= year) { idx = i; break; } }
+    if (idx !== -1) {
+        const cur = sortedEras[idx]; const next = sortedEras[idx + 1];
+        info.eraStartYear = cur.startYear;
+        if (next) info.eraEndYear = next.startYear; else if (info.nationEndYear) info.eraEndYear = info.nationEndYear;
+        if (cur.type === 'collapse') return { ...info, isCollapsed: true, name: cur.name || `${info.name}(滅亡)`, color: '#9ca3af', flag: null, eraEvent: cur.event };
+        return { ...info, name: cur.name, color: cur.color, flag: cur.flag || nation.flag, params: cur.params || {}, isCollapsed: false, eraEvent: cur.event };
+    }
+    return info;
+};
+
+const NATION_PARAMS = [
+    { key: 'ideology_gov', label: '統治イデオロギー', defaultColor: '#60a5fa' },
+    { key: 'ideology_pol', label: '政治イデオロギー', defaultColor: '#fbbf24' },
+    { key: 'ideology_eco', label: '経済イデオロギー', defaultColor: '#4ade80' },
+    { key: 'ideology_dip', label: '外交イデオロギー', defaultColor: '#a78bfa' },
+    { key: 'suffrage', label: '選挙権', defaultColor: '#f87171' },
+    { key: 'religion', label: '宗教', defaultColor: '#fb923c' },
+];
+
+const IconWrapper = ({ children, size=24, className="" }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{children}</svg>;
+const Icons = {
+    Plus: p=><IconWrapper {...p}><path d="M5 12h14"/><path d="M12 5v14"/></IconWrapper>,
+    BookOpen: p=><IconWrapper {...p}><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></IconWrapper>,
+    Trash2: p=><IconWrapper {...p}><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></IconWrapper>,
+    Edit2: p=><IconWrapper {...p}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></IconWrapper>,
+    Save: p=><IconWrapper {...p}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></IconWrapper>,
+    ChevronRight: p=><IconWrapper {...p}><polyline points="9 18 15 12 9 6"/></IconWrapper>,
+    ChevronDown: p=><IconWrapper {...p}><polyline points="6 9 12 15 18 9"/></IconWrapper>,
+    Search: p=><IconWrapper {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></IconWrapper>,
+    Calendar: p=><IconWrapper {...p}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></IconWrapper>,
+    Download: p=><IconWrapper {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></IconWrapper>,
+    Upload: p=><IconWrapper {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></IconWrapper>,
+    Filter: p=><IconWrapper {...p}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></IconWrapper>,
+    Tag: p=><IconWrapper {...p}><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></IconWrapper>,
+    Settings: p=><IconWrapper {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></IconWrapper>,
+    BarChart2: p=><IconWrapper {...p}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></IconWrapper>,
+    TrendingUp: p=><IconWrapper {...p}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></IconWrapper>,
+    Users: p=><IconWrapper {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconWrapper>,
+    DollarSign: p=><IconWrapper {...p}><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></IconWrapper>,
+    X: p=><IconWrapper {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></IconWrapper>,
+    Activity: p=><IconWrapper {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></IconWrapper>,
+    ArrowLeft: p=><IconWrapper {...p}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></IconWrapper>,
+    History: p=><IconWrapper {...p}><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/></IconWrapper>,
+    List: p=><IconWrapper {...p}><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></IconWrapper>,
+    Flag: p=><IconWrapper {...p}><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></IconWrapper>,
+    Image: p=><IconWrapper {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></IconWrapper>,
+    Globe: p=><IconWrapper {...p}><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></IconWrapper>,
+    Skull: p=><IconWrapper {...p}><circle cx="9" cy="12" r="1" /><circle cx="15" cy="12" r="1" /><path d="M8 20v2h8v-2" /><path d="M12.5 17l-.5-4" /><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20" /></IconWrapper>,
+    RefreshCw: p=><IconWrapper {...p}><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></IconWrapper>,
+    HelpCircle: p=><IconWrapper {...p}><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></IconWrapper>,
+    Link: p=><IconWrapper {...p}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></IconWrapper>,
+    CornerDownRight: p=><IconWrapper {...p}><polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></IconWrapper>,
+    GitMerge: p=><IconWrapper {...p}><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></IconWrapper>,
+    Minus: p=><IconWrapper {...p}><line x1="5" y1="12" x2="19" y2="12"/></IconWrapper>,
+};
+
+const SectionHeader = ({ icon: Icon, title, desc }) => (
+    <div className="bg-gray-800 text-white p-6 rounded-lg shadow-md mb-6">
+        <h2 className="text-2xl font-bold flex items-center gap-2"><Icon size={28} className="text-yellow-500" />{title}</h2>{desc && <p className="text-gray-400 mt-2 text-sm">{desc}</p>}
+    </div>
+);
+
+const NationTag = ({ text, nations, year }) => {
+    if (text === '世界') return (<span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 inline-flex items-center gap-1 relative pr-2"><Icons.Globe size={10} /> 世界</span>);
+    const matchedNation = nations.find(n => { const info = getNationInfo(n, year); return info.name === text && !info.isCollapsed; });
+    let flagSrc = null; if (matchedNation) { const info = getNationInfo(matchedNation, year); flagSrc = info.flag; }
+    return (<span className="text-[10px] bg-black/5 text-gray-600 px-1.5 py-0.5 rounded border border-black/5 inline-flex items-center gap-1 relative pr-2">{text}{flagSrc && (<span className="inline-block w-4 h-3 rounded-sm overflow-hidden border border-black/10 ml-1 shadow-sm"><img src={flagSrc} alt="" className="w-full h-full object-cover" /></span>)}</span>);
+};
+
+const HelpView = ({ setView }) => (
+    <div className="space-y-8 animate-fade-in pb-20 max-w-5xl mx-auto text-gray-800">
+        <div className="flex items-center gap-4 mb-6"><button onClick={() => setView('timeline')} className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 font-bold rounded-lg shadow hover:bg-gray-50 transition-colors border border-gray-200"><Icons.ArrowLeft size={20} /> 年表へ戻る</button><h1 className="text-2xl font-bold text-gray-800">英覇歴代記 操作マニュアル</h1></div>
+        <section className="bg-white p-6 rounded-lg shadow-md border-t-4 border-yellow-500"><h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-gray-900 border-b pb-2"><span className="bg-yellow-100 p-2 rounded text-yellow-700"><Icons.Plus size={20}/></span>1. 歴史を刻む (年表作成)</h2><div className="space-y-4 text-sm leading-relaxed"><p>画面右上の<span className="font-bold bg-gray-100 px-1 rounded">歴史を刻む</span>ボタンから、出来事を記録します。</p></div></section>
+    </div>
+);
+
+const NationTableView = ({ setView, nations, stats, onEditNation, onAddNation }) => { 
+    const [year, setYear] = useState(DEFAULT_YEAR);
+    const [expandedParents, setExpandedParents] = useState({}); 
+    const toggleExpand = (nationId) => { setExpandedParents(prev => ({ ...prev, [nationId]: !prev[nationId] })); };
+    const getStat = (nationId, targetYear) => { const exactMatch = stats.find(s => s.nationId === nationId && s.year === targetYear); if (exactMatch) return { ...exactMatch, isEstimated: false }; const nationStats = stats.filter(s => s.nationId === nationId).sort((a, b) => a.year - b.year); if (nationStats.length < 2) return null; let prev = null, next = null; for (const s of nationStats) { if (s.year < targetYear) prev = s; else if (s.year > targetYear) { next = s; break; } } if (prev && next) { const timeRatio = (targetYear - prev.year) / (next.year - prev.year); return { nationId, year: targetYear, population: Math.round(prev.population + (next.population - prev.population) * timeRatio), gdp: Math.round(prev.gdp + (next.gdp - prev.gdp) * timeRatio), isEstimated: true }; } return null; };
+    const resolveRelationships = () => { const parents = {}; const children = {}; nations.forEach(n => { const info = getNationInfo(n, year); if (info.eraEvent) { const type = ERA_EVENT_TYPES[info.eraEvent.type]; const targets = info.eraEvent.targetIds || (info.eraEvent.targetId ? [info.eraEvent.targetId] : []); if (type) { targets.forEach(targetId => { if (type.relationship === 'child') { if (!parents[targetId]) parents[targetId] = []; parents[targetId].push({ parentId: n.id, type: info.eraEvent.type }); } else if (type.relationship === 'parent') { if (!parents[n.id]) parents[n.id] = []; parents[n.id].push({ parentId: targetId, type: info.eraEvent.type }); } }); } } }); Object.keys(parents).forEach(childId => { parents[childId].forEach(rel => { if (!children[rel.parentId]) children[rel.parentId] = []; if (!children[rel.parentId].includes(childId)) children[rel.parentId].push(childId); }); }); return { parents, children }; };
+    const { parents, children } = resolveRelationships();
+    const renderRow = (nation, depth = 0, parentId = null) => {
+        const info = getNationInfo(nation, year); const stat = getStat(nation.id, year);
+        if (parentId && !expandedParents[parentId]) return null;
+        if (depth === 0 && parents[nation.id] && parents[nation.id].length > 0) return null;
+        if (depth === 0 && info.isCollapsed) return null;
+        if (info.isFuture) return null;
+        const statStyle = stat?.isEstimated ? "text-gray-500 italic" : "text-gray-800";
+        let relationLabel = null; let displayFlag = info.flag; let displayName = info.name; let eventYearLabel = null; let targetEvent = null;
+        if (depth > 0) { const targetEra = nation.eras?.find(e => e.startYear <= year && e.event && (e.event.targetId === parentId || (e.event.targetIds && e.event.targetIds.includes(parentId))) && ['annexed_by', 'partitioned_by', 'merger', 'dissolution', 'be_puppet'].includes(e.event.type)); if (targetEra) { targetEvent = targetEra.event; eventYearLabel = <span className="text-[10px] font-mono bg-gray-200 text-gray-700 px-1 rounded ml-1">{targetEra.startYear}年:</span>; if (nation.flag) displayFlag = nation.flag; if (targetEra.flag) displayFlag = targetEra.flag; if (targetEra.type === 'collapse' || targetEra.name.includes('滅亡')) { displayName = nation.name; } else { displayName = targetEra.name; } } else { relationLabel = <span className="ml-2 text-[10px] text-gray-400 border border-gray-200 px-1 rounded">(従属)</span>; } } else { if (info.eraEvent && ['independence', 'splinter'].includes(info.eraEvent.type)) { targetEvent = info.eraEvent; } }
+        if (targetEvent) { const t = ERA_EVENT_TYPES[targetEvent.type]; if (t) { const targetIds = targetEvent.targetIds || (targetEvent.targetId ? [targetEvent.targetId] : []); let targetNames = ''; if (targetIds.length > 0) { targetNames = targetIds.map(tid => { const tn = nations.find(n => n.id === tid); return tn ? tn.name : '?'; }).join('・'); } let labelText = t.label; let styleClass = "bg-gray-100 text-gray-600 border-gray-200"; if (['annexed_by', 'merger'].includes(targetEvent.type)) { labelText = `${targetNames}に併合`; styleClass = "bg-red-50 text-red-600 border-red-100"; } else if (targetEvent.type === 'partitioned_by') { labelText = `${targetNames}により分割`; styleClass = "bg-red-50 text-red-600 border-red-100"; } else if (targetEvent.type === 'dissolution') { labelText = `${targetNames}へ解体・分裂`; styleClass = "bg-red-50 text-red-600 border-red-100"; } else if (['independence', 'splinter'].includes(targetEvent.type)) { labelText = `${targetNames}${t.label}`; styleClass = "bg-indigo-50 text-indigo-700 border-indigo-100"; } else if (targetEvent.type === 'be_puppet') { labelText = `${targetNames}の傀儡`; } relationLabel = <span className={`ml-2 text-[10px] px-1 rounded border flex items-center gap-1 ${styleClass}`}>{t.icon} {labelText}</span>; } }
+        const myChildren = children[nation.id] || []; const hasChildren = myChildren.length > 0; const isExpanded = expandedParents[nation.id]; const isChild = depth > 0; const rowClass = isChild ? "bg-gray-50/80" : "hover:bg-gray-50"; const opacityClass = (info.isCollapsed && depth === 0) ? "opacity-60 grayscale" : ""; const key = `${nation.id}-${parentId || 'root'}`;
+        let rankBadge = null; if (depth === 0 && info.params && !info.isCollapsed) { const rankInfo = NATION_RANKS[nation.rank || 'minor_power']; if (rankInfo) { rankBadge = <span className="text-[9px] px-1 rounded border ml-1 whitespace-nowrap" style={{borderColor: rankInfo.color, color: rankInfo.color, backgroundColor: 'white'}}>{rankInfo.label}</span>; } }
+        return ( <React.Fragment key={key}> <tr className={`${rowClass} transition-colors ${opacityClass}`}> <td className="px-4 py-3 font-bold sticky left-0 bg-white/95 z-10 shadow-sm border-r border-gray-100 align-top"> <div className="flex items-center" style={{ paddingLeft: `${depth * 20}px` }}> {hasChildren ? ( <button onClick={() => toggleExpand(nation.id)} className="mr-2 p-0.5 rounded hover:bg-gray-200 text-gray-500"> {isExpanded ? <Icons.ChevronDown size={14} /> : <Icons.ChevronRight size={14} />} </button> ) : ( <span className="w-4 mr-2"></span> )} {isChild && !hasChildren && <Icons.CornerDownRight size={14} className="text-gray-300 mr-1" />} {displayFlag ? ( <img src={displayFlag} alt="Flag" className="w-8 h-5 object-cover border border-gray-200 shadow-sm mr-2 flex-shrink-0" /> ) : ( <div className="w-8 h-5 shadow-sm border border-gray-200 flex-shrink-0 flex items-center justify-center text-[8px] text-gray-400 bg-gray-100 mr-2">No</div> )} <div className="flex flex-col justify-center"> <div className="flex items-center gap-1 flex-wrap"> {eventYearLabel} <span className={`text-sm ${info.isCollapsed && depth === 0 ? 'line-through text-gray-400' : ''}`}>{displayName}</span> {rankBadge} {relationLabel} </div> </div> </div> </td> <td className="px-2 py-3 text-center border-l border-gray-100 bg-gray-50/30"><button onClick={() => onEditNation(nation)} className="text-blue-600 hover:bg-blue-100 p-2 rounded transition-colors"><Icons.Edit2 size={16} /></button></td> <td className="px-2 py-3 text-center border-l border-gray-100 bg-gray-50/30"><div className="flex flex-col items-center justify-center leading-tight"><span className="text-xs font-bold text-gray-700">{info.eraStartYear ? info.eraStartYear : '不明'}<span className="text-gray-400 mx-0.5">～</span>{info.eraEndYear ? info.eraEndYear : ''}</span><span className="text-[10px] text-gray-400 mt-0.5">(国: {info.nationStartYear ? info.nationStartYear : '不明'}<span className="mx-0.5">～</span>{info.nationEndYear ? info.nationEndYear : ''})</span></div></td> <td className={`px-4 py-3 text-right font-mono border-l border-gray-100 bg-blue-50/30 ${statStyle} text-xs`}>{stat ? formatJapaneseNumber(stat.population, '人', true) : '-'}</td> <td className={`px-4 py-3 text-right font-mono border-l border-gray-100 bg-green-50/30 ${statStyle} text-xs`}>{stat ? formatJapaneseNumber(stat.gdp, '円', true) : '-'}</td> <td className={`px-4 py-3 text-right font-mono border-l border-gray-100 bg-yellow-50/30 ${statStyle} text-xs`}>{stat ? formatJapaneseNumber(calculatePerCapita(stat.gdp, stat.population), '円', true) : '-'}</td> {NATION_PARAMS.map(p => { const param = info.params?.[p.key] || {}; const bgColor = param.color || '#f3f4f6'; const isLight = parseInt(bgColor.replace('#', ''), 16) > 0xffffff / 2; const textColor = param.color ? (isLight ? '#000' : '#fff') : '#9ca3af'; return ( <td key={p.key} className="px-2 py-2 border-l border-gray-100 align-top"> <div className="h-full w-full rounded p-1 text-center flex flex-col items-center justify-center gap-0.5 min-h-[40px]" style={{backgroundColor: bgColor, color: textColor, border: param.name ? 'none' : '1px dashed #e5e7eb'}}> {param.name ? ( <> <div className="font-bold leading-tight text-[11px]">{param.name}</div> {param.desc && <div className={`text-[8px] leading-tight opacity-80 font-normal mt-0.5`}>{param.desc}</div>} </> ) : <span className="text-[10px]">-</span>} </div> </td> ); })} </tr> {myChildren.map(childId => { const childNation = nations.find(n => n.id === childId); if (childNation) return renderRow(childNation, depth + 1, nation.id); return null; })} </React.Fragment> );
+    };
+    const rootNations = nations.filter(n => !parents[n.id]);
+    return ( <div className="space-y-6 animate-fade-in pb-20"> <div className="flex flex-wrap items-center justify-between gap-4"> <button onClick={() => setView('timeline')} className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 font-bold rounded-lg shadow hover:bg-gray-50 transition-colors border border-gray-200"><Icons.ArrowLeft size={20} /> 年表へ戻る</button> <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg shadow border border-gray-200"> <span className="font-bold text-sm text-gray-600 whitespace-nowrap">表示年:</span> <div className="flex items-center gap-2"><input type="range" min="-3000" max="3000" value={year} onChange={e => setYear(parseInt(e.target.value) || 0)} className="w-32 md:w-48 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-900" /><input type="number" value={year} onChange={e => setYear(parseInt(e.target.value) || 0)} className="w-20 p-1 border rounded font-mono text-lg font-bold text-center text-blue-900" /></div> </div> </div> <SectionHeader icon={Icons.List} title={`国家体制一覧 (${year}年時点)`} desc="各国の統治体制、イデオロギー、宗教などの詳細を比較・確認できます。大陸別に国力ランク順（大列強 > 都市国家）で表示されます。" /> <div className="bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden"> <div className="overflow-x-auto custom-scrollbar"> <table className="w-full text-sm text-left whitespace-nowrap border-collapse"> <thead className="bg-gray-100 text-gray-700 font-bold uppercase border-b-2 border-gray-300"> <tr> <th className="px-4 py-3 sticky left-0 bg-gray-100 z-10 shadow-sm min-w-[240px] border-r border-gray-200">国名・国旗</th> <th className="px-2 py-3 text-center border-l border-gray-200 w-[60px] bg-gray-50">操作</th> <th className="px-4 py-3 text-center border-l border-gray-200 min-w-[140px] bg-gray-50">期間</th> <th className="px-4 py-3 text-center border-l border-gray-200 min-w-[100px] bg-blue-50">人口</th> <th className="px-4 py-3 text-center border-l border-gray-200 min-w-[120px] bg-green-50">GDP</th> <th className="px-4 py-3 text-center border-l border-gray-200 min-w-[100px] bg-yellow-50">一人あたり</th> {NATION_PARAMS.map(p => ( <th key={p.key} className="px-4 py-3 text-center border-l border-gray-200 min-w-[140px]">{p.label}</th> ))} </tr> </thead> <tbody className="divide-y divide-gray-200"> {Object.entries(LOCATIONS).sort((a, b) => a[1].order - b[1].order).map(([locKey, locInfo]) => { const nationsInLoc = rootNations.filter(n => (n.location || 'unknown') === locKey); if (nationsInLoc.length === 0) return null; nationsInLoc.sort((a, b) => { const rankA = NATION_RANKS[a.rank || 'minor_power']?.order || 99; const rankB = NATION_RANKS[b.rank || 'minor_power']?.order || 99; return rankA - rankB; }); return ( <React.Fragment key={locKey}> <tr className="bg-orange-900/10 border-b border-orange-900/20"> <td colSpan={6 + NATION_PARAMS.length} className="px-4 py-2 font-bold text-white text-sm tracking-wider" style={{ backgroundColor: locInfo.color }}> {locInfo.label} </td> </tr> {nationsInLoc.map(nation => renderRow(nation))} </React.Fragment> ); }) } </tbody> </table> </div> </div> <div className="flex justify-end"> <button onClick={onAddNation} className="bg-blue-900 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow hover:bg-blue-800"><Icons.Plus size={18} /> 新規国家を追加</button> </div> </div> );
+};
+
+const SettingsView = ({ setView, nations, setNations, targetNation, setTargetNation }) => {
+    const [newNationName, setNewNationName] = useState(''); const [newNationColor, setNewNationColor] = useState('#000000'); const [newNationFlag, setNewNationFlag] = useState(null); const [editingNation, setEditingNation] = useState(null); 
+    const [eraStartYear, setEraStartYear] = useState(''); const [eraName, setEraName] = useState(''); const [eraColor, setEraColor] = useState('#000000'); const [eraFlag, setEraFlag] = useState(null); const [eraParams, setEraParams] = useState({}); const [eraMode, setEraMode] = useState('normal'); const [editingEraIndex, setEditingEraIndex] = useState(null); const [eraEventType, setEraEventType] = useState('none'); const [eraRelatedNationId, setEraRelatedNationId] = useState(''); const [eraRelatedNationIds, setEraRelatedNationIds] = useState([]); 
+    const newFlagInputRef = useRef(null); const editFlagInputRef = useRef(null); const eraFlagInputRef = useRef(null);
+    useEffect(() => { if (targetNation) { setEditingNation(targetNation); } else { setEditingNation(null); } }, [targetNation]);
+    const handleClose = () => { if (setTargetNation) setTargetNation(null); setView('timeline'); };
+    const handleFlagUpload = async (e, setter) => { const file = e.target.files[0]; if (!file) return; try { const base64 = await fileToBase64(file); setter(base64); } catch (err) { console.error("Image upload failed", err); alert("画像の読み込みに失敗しました。"); } };
+    const addNation = () => { if (!newNationName) return; const newNation = { id: Date.now().toString(), name: newNationName, color: newNationColor, flag: newNationFlag, eras: [], startYear: null, note: '', location: 'unknown', rank: 'minor_power' }; setNations([...nations, newNation]); setNewNationName(''); setNewNationFlag(null); if(newFlagInputRef.current) newFlagInputRef.current.value = ''; setEditingNation(newNation); };
+    const deleteNation = (id) => { if (window.confirm('削除しますか？')) { setNations(nations.filter(n => n.id !== id)); if (editingNation && editingNation.id === id) setEditingNation(null); } };
+    const updateNationBase = (id, key, value) => { const updated = { ...editingNation, [key]: value }; setEditingNation(updated); setNations(nations.map(n => n.id === id ? updated : n)); };
+    const updateEraParam = (key, field, value) => { setEraParams(prev => ({ ...prev, [key]: { ...prev[key], [field]: value } })); };
+    const toggleRelatedNationId = (id) => { setEraRelatedNationIds(prev => prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]); };
+    const optimizeAllImages = async () => { if (!window.confirm('登録済みの全ての国旗画像を軽量化(リサイズ・圧縮)します。\n画質が少し低下する可能性がありますが、データ容量を大幅に削減できます。\n実行しますか？')) return; let count = 0; const newNations = await Promise.all(nations.map(async (n) => { let updated = { ...n }; let changed = false; if (updated.flag && updated.flag.startsWith('data:image')) { const compressed = await compressBase64Image(updated.flag); if (updated.flag !== compressed) { updated.flag = compressed; changed = true; count++; } } if (updated.eras && updated.eras.length > 0) { const newEras = await Promise.all(updated.eras.map(async (era) => { if (era.flag && era.flag.startsWith('data:image')) { const compressedEraFlag = await compressBase64Image(era.flag); if (era.flag !== compressedEraFlag) { count++; return { ...era, flag: compressedEraFlag }; } } return era; })); if (JSON.stringify(newEras) !== JSON.stringify(updated.eras)) { updated.eras = newEras; changed = true; } } return updated; })); setNations(newNations); if (editingNation) { const currentEditing = newNations.find(n => n.id === editingNation.id); if (currentEditing) setEditingNation(currentEditing); } alert(`完了しました。\n${count} 枚の画像を軽量化しました。`); };
+    const saveEra = () => { if (!eraStartYear) return; let targetId = eraRelatedNationId; let targetIds = []; const multiTargetEvents = ['partitioned_by', 'dissolution', 'unification', 'annexation', 'partition']; if (multiTargetEvents.includes(eraEventType)) { targetIds = eraRelatedNationIds; targetId = null; } else if (eraRelatedNationId) { targetIds = [eraRelatedNationId]; } let type = 'default'; if (eraMode === 'collapse') type = 'collapse'; const newEraData = { startYear: parseInt(eraStartYear), name: eraName || (eraMode === 'collapse' ? '滅亡' : editingNation.name), color: eraColor, flag: eraFlag, params: eraParams, type: type, event: { type: eraEventType, targetId: targetId, targetIds: targetIds } }; let updatedEras; if (editingEraIndex !== null) { updatedEras = [...editingNation.eras]; updatedEras[editingEraIndex] = newEraData; } else { updatedEras = [ ...(editingNation.eras || []), newEraData]; } const updatedNation = { ...editingNation, eras: updatedEras }; let updatedNations = nations.map(n => n.id === editingNation.id ? updatedNation : n); setEditingNation(updatedNation); setNations(updatedNations); resetEraForm(); };
+    const resetEraForm = () => { setEraStartYear(''); setEraName(''); setEraParams({}); setEraFlag(null); setEraColor('#000000'); setEraMode('normal'); setEraEventType('none'); setEraRelatedNationId(''); setEraRelatedNationIds([]); if(eraFlagInputRef.current) eraFlagInputRef.current.value = ''; setEditingEraIndex(null); };
+    const startEditEra = (index) => { const era = editingNation.eras[index]; setEraStartYear(era.startYear); setEraName(era.name); setEraColor(era.color); setEraFlag(era.flag); setEraParams(era.params || {}); if (era.type === 'collapse') setEraMode('collapse'); else if (['foundation', 'independence', 'splinter', 'unification', 'foundation_puppet'].includes(era.event?.type)) setEraMode('birth'); else setEraMode('normal'); if (era.event) { setEraEventType(era.event.type || 'none'); setEraRelatedNationId(era.event.targetId || ''); setEraRelatedNationIds(era.event.targetIds || []); } else { setEraEventType('none'); setEraRelatedNationId(''); setEraRelatedNationIds([]); } setEditingEraIndex(index); };
+    const deleteEra = (index) => { const updatedEras = editingNation.eras.filter((_, i) => i !== index); const updatedNation = { ...editingNation, eras: updatedEras }; setEditingNation(updatedNation); setNations(nations.map(n => n.id === editingNation.id ? updatedNation : n)); if (editingEraIndex === index) resetEraForm(); };
+
+    return ( <div className="space-y-6 animate-fade-in pb-20"> <div className="flex items-center gap-4"><button onClick={handleClose} className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 font-bold rounded-lg shadow hover:bg-gray-50 transition-colors border border-gray-200"><Icons.ArrowLeft size={20} /> 年表へ戻る</button></div> <SectionHeader icon={Icons.Globe} title="国家設定・管理" desc="国家の新規登録、歴史的変遷（Era）の管理、国旗やテーマカラーの設定を行います。" /> <div className="flex flex-col md:flex-row gap-6 items-start"> <div className="w-full md:w-1/3 space-y-6"> <div className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden"> <div className="p-4 bg-gray-800 text-white flex justify-between items-center"><h2 className="text-lg font-bold flex items-center gap-2"><Icons.Globe size={20} className="text-yellow-500"/> 国家リスト</h2></div> <div className="p-4 border-b border-gray-100 bg-gray-50"> <h3 className="font-bold text-xs text-gray-500 mb-2">新規国家追加</h3> <div className="flex gap-2 items-center mb-2"> <div className="flex-shrink-0"><label className="cursor-pointer block w-10 h-7 bg-white border border-gray-300 flex items-center justify-center text-[8px] text-gray-400 hover:bg-gray-100">{newNationFlag ? <img src={newNationFlag} className="w-full h-full object-cover" /> : '画像'}<input type="file" className="hidden" accept="image/*" ref={newFlagInputRef} onChange={(e) => handleFlagUpload(e, setNewNationFlag)} /></label></div> <input type="color" value={newNationColor} onChange={e => setNewNationColor(e.target.value)} className="h-7 w-7 rounded cursor-pointer border border-gray-300" /> <input type="text" value={newNationName} onChange={e => setNewNationName(e.target.value)} placeholder="国名" className="flex-grow p-1 border rounded text-sm" /> </div> <button onClick={addNation} className="w-full bg-blue-900 text-white py-1.5 rounded text-sm font-bold hover:bg-blue-800 flex justify-center items-center gap-1"><Icons.Plus size={14} /> 追加</button> </div> <div className="max-h-[500px] overflow-y-auto custom-scrollbar p-2 space-y-1"> {nations.map(n => ( <div key={n.id} onClick={() => { setEditingNation(n); resetEraForm(); }} className={`flex items-center justify-between p-3 rounded cursor-pointer border transition-all ${editingNation && editingNation.id === n.id ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-200' : 'bg-white border-transparent hover:bg-gray-50 hover:border-gray-200'}`}><div className="flex items-center gap-3">{n.flag ? <img src={n.flag} className="w-8 h-5 object-cover border border-gray-200" /> : <div className="w-8 h-5 bg-gray-100 border border-gray-200"></div>}<div className="w-3 h-3 rounded-full" style={{backgroundColor: n.color}}></div><span className="font-bold text-sm">{n.name}</span></div><Icons.ChevronRight size={16} className="text-gray-400" /></div> ))} </div> <div className="p-2 border-t bg-gray-50"> <button onClick={optimizeAllImages} className="w-full py-2 text-xs text-gray-600 bg-white border border-gray-300 rounded hover:bg-gray-100 flex items-center justify-center gap-2"><Icons.Image size={14} /> 全画像の軽量化 (メンテナンス)</button> </div> </div> </div> <div className="w-full md:w-2/3"> {editingNation ? ( <div className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden animate-fade-in"> <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50"><h3 className="font-bold text-lg flex items-center gap-2"><span className="w-4 h-4 rounded-full inline-block" style={{backgroundColor: editingNation.color}}></span>"{editingNation.name}" の設定</h3><button onClick={() => deleteNation(editingNation.id)} className="text-red-500 text-xs flex items-center gap-1 hover:underline bg-red-50 px-2 py-1 rounded border border-red-100"><Icons.Trash2 size={12} /> 削除</button></div> <div className="p-6 space-y-8"> <section> <h4 className="text-xs font-bold text-gray-500 uppercase mb-3 border-b pb-1">基本情報 (初期状態)</h4> <div className="flex gap-6 items-start"> <div className="flex-shrink-0 text-center"> <label className="block cursor-pointer group relative"> {editingNation.flag ? <img src={editingNation.flag} className="w-24 h-16 object-cover border border-gray-300 shadow-sm" /> : <div className="w-24 h-16 bg-gray-100 border border-gray-300 flex items-center justify-center text-gray-400 text-xs">No Image</div>} <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity">変更</div> <input type="file" className="hidden" accept="image/*" ref={editFlagInputRef} onChange={(e) => handleFlagUpload(e, (val) => updateNationBase(editingNation.id, 'flag', val))} /> </label> </div> <div className="flex-grow grid grid-cols-2 gap-4"> <div><label className="block text-xs font-bold text-gray-600 mb-1">国名</label><input type="text" value={editingNation.name} onChange={e => updateNationBase(editingNation.id, 'name', e.target.value)} className="w-full p-2 border rounded shadow-sm font-bold" /></div> <div> <label className="block text-xs font-bold text-gray-600 mb-1">テーマカラー</label> <div className="flex items-center gap-2"> <input type="color" value={editingNation.color} onChange={e => updateNationBase(editingNation.id, 'color', e.target.value)} className="h-9 w-12 rounded cursor-pointer border border-gray-300 shadow-sm" /> <span className="text-xs text-gray-500 font-mono">{editingNation.color}</span> </div> </div> <div> <label className="block text-xs font-bold text-gray-600 mb-1">所在・地域</label> <select value={editingNation.location || 'unknown'} onChange={e => updateNationBase(editingNation.id, 'location', e.target.value)} className="w-full p-2 border rounded shadow-sm text-sm bg-white"> {Object.entries(LOCATIONS).sort((a,b) => a[1].order - b[1].order).map(([key, info]) => ( <option key={key} value={key}>{info.label}</option> ))} </select> </div> <div> <label className="block text-xs font-bold text-gray-600 mb-1">国力ランク</label> <select value={editingNation.rank || 'minor_power'} onChange={e => updateNationBase(editingNation.id, 'rank', e.target.value)} className="w-full p-2 border rounded shadow-sm text-sm bg-white font-bold" style={{color: NATION_RANKS[editingNation.rank || 'minor_power']?.color}}> {Object.entries(NATION_RANKS).sort((a,b) => a[1].order - b[1].order).map(([key, info]) => ( <option key={key} value={key} style={{color: info.color}}>{info.label}</option> ))} </select> </div> </div> </div> </section> <section> <h4 className="text-xs font-bold text-gray-500 uppercase mb-3 border-b pb-1">国家詳細・メモ</h4> <textarea value={editingNation.note || ''} onChange={e => updateNationBase(editingNation.id, 'note', e.target.value)} className="w-full p-3 border rounded-lg text-sm leading-relaxed min-h-[100px] focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none resize-y shadow-sm" placeholder="国家の成り立ち、文化、政治体制の特徴などを自由に記述してください..." /> </section> <section> <h4 className="text-xs font-bold text-gray-500 uppercase mb-3 border-b pb-1">歴史的変遷 (Era)</h4> <div className="flex flex-col lg:flex-row gap-6"> <div className={`flex-grow p-4 rounded-lg border transition-colors ${eraMode === 'collapse' ? 'bg-red-50 border-red-300' : eraMode === 'birth' ? 'bg-green-50 border-green-300' : (editingEraIndex !== null ? 'bg-yellow-50 border-yellow-300' : 'bg-blue-50 border-blue-200')}`}> <div className="flex justify-between items-center mb-4"> <div className="flex bg-white rounded-lg shadow-sm border border-gray-200 p-1"> <button onClick={() => setEraMode('normal')} className={`px-3 py-1 text-xs font-bold rounded ${eraMode === 'normal' ? 'bg-blue-100 text-blue-800' : 'text-gray-500 hover:bg-gray-50'}`}>通常(変更)</button> <button onClick={() => setEraMode('birth')} className={`px-3 py-1 text-xs font-bold rounded ${eraMode === 'birth' ? 'bg-green-100 text-green-800' : 'text-gray-500 hover:bg-gray-50'}`}>✨ 誕生</button> <button onClick={() => setEraMode('collapse')} className={`px-3 py-1 text-xs font-bold rounded ${eraMode === 'collapse' ? 'bg-red-100 text-red-800' : 'text-gray-500 hover:bg-gray-50'}`}>💀 滅亡</button> </div> {editingEraIndex !== null && <button onClick={resetEraForm} className="text-xs text-gray-500 hover:underline">キャンセル</button>} </div> <div className="mb-4"><label className="block text-xs font-bold text-gray-600 mb-1">開始年 (発生年)</label><input type="number" value={eraStartYear} onChange={e => setEraStartYear(e.target.value)} className="w-full p-2 border rounded text-lg font-bold" placeholder="例: 1900" required /></div> {eraMode === 'collapse' ? ( <div className="animate-fade-in space-y-4"> <div className="p-3 bg-white rounded border border-red-100"> <label className="block text-xs font-bold text-red-600 mb-1">滅亡の理由</label> <select value={eraEventType} onChange={e => setEraEventType(e.target.value)} className="w-full p-2 border rounded text-sm bg-white"> <option value="none">自然消滅 / 不明</option> <option value="annexed_by">他国に併合される</option> <option value="merger">他国と合併して消滅</option> <option value="dissolution">分裂・解体して消滅 (複数国へ)</option> <option value="partitioned_by">複数国により分割統治される</option> </select> </div> {(eraEventType === 'partitioned_by' || eraEventType === 'dissolution') ? ( <div> <label className="block text-xs font-bold text-gray-600 mb-1">{eraEventType === 'dissolution' ? '分裂後に生まれた国 (複数可)' : '分割した国 (複数可)'}</label> <div className="border rounded bg-white p-2 max-h-32 overflow-y-auto custom-scrollbar"> {nations.filter(n => n.id !== editingNation.id).map(n => ( <label key={n.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked={eraRelatedNationIds.includes(n.id)} onChange={() => toggleRelatedNationId(n.id)} className="rounded text-red-600" />{n.flag && <img src={n.flag} className="w-4 h-3 object-cover border border-gray-200" />}<span className="text-xs">{n.name}</span></label> ))} </div> </div> ) : eraEventType !== 'none' && ( <div> <label className="block text-xs font-bold text-gray-600 mb-1">対象国</label> <select value={eraRelatedNationId} onChange={e => setEraRelatedNationId(e.target.value)} className="w-full p-2 border rounded text-sm bg-white"> <option value="">-- 国を選択 --</option> {nations.filter(n => n.id !== editingNation.id).map(n => <option key={n.id} value={n.id}>{n.name}</option>)} </select> </div> )} <p className="text-[10px] text-red-400">※滅亡を設定すると、以降の年表には表示されなくなります。</p> </div> ) : ( <div className="animate-fade-in space-y-4"> <div className="flex gap-3"> <label className="cursor-pointer flex-shrink-0 w-16 h-10 bg-white border border-gray-300 flex items-center justify-center hover:bg-gray-50 relative group"> {eraFlag ? <img src={eraFlag} className="w-full h-full object-cover" /> : <span className="text-[10px] text-gray-400">Flag</span>} <input type="file" className="hidden" accept="image/*" ref={eraFlagInputRef} onChange={(e) => handleFlagUpload(e, setEraFlag)} /> </label> <div className="flex-grow grid grid-cols-1 gap-2"> <input type="text" value={eraName} onChange={e => setEraName(e.target.value)} className="w-full p-2 border rounded text-sm font-bold" placeholder={eraMode === 'birth' ? "建国時の国名" : "変更後の国名"} /> <div className="flex items-center gap-2"> <input type="color" value={eraColor} onChange={e => setEraColor(e.target.value)} className="h-8 w-12 rounded cursor-pointer border border-gray-300" /> <span className="text-xs text-gray-500">テーマカラー</span> </div> </div> </div> <div className="p-3 bg-white rounded border border-blue-100"> <label className="block text-[10px] font-bold text-blue-600 mb-1 flex items-center gap-1"><Icons.Link size={10}/> {eraMode === 'birth' ? '成立の経緯' : '関連イベント (任意)'}</label> <div className="flex flex-col gap-2"> <div className="flex gap-2"> <select value={eraEventType} onChange={e => setEraEventType(e.target.value)} className="w-1/2 p-1.5 border rounded text-xs"> <option value="none">-- なし --</option> {eraMode === 'birth' ? ( <> <option value="foundation">建国・成立 (単独)</option> <option value="independence">より独立</option> <option value="splinter">より分裂して成立</option> <option value="unification">を統合して成立</option> <option value="foundation_puppet">の傀儡国として成立</option> </> ) : ( <> <option value="regime_change">政体の変更</option> <option value="annexation">を併合</option> <option value="partition">を分割統治</option> <option value="puppet">を傀儡化</option> <option value="be_puppet">の傀儡になる</option></> )} </select> {!['unification', 'annexation', 'partition'].includes(eraEventType) && ( <select value={eraRelatedNationId} onChange={e => setEraRelatedNationId(e.target.value)} disabled={['none', 'foundation', 'regime_change'].includes(eraEventType)} className="w-1/2 p-1.5 border rounded text-xs disabled:opacity-50"> <option value="">-- 対象国 --</option> {nations.filter(n => n.id !== editingNation.id).map(n => <option key={n.id} value={n.id}>{n.name}</option>)} </select> )} </div> {['unification', 'annexation', 'partition'].includes(eraEventType) && ( <div className="mt-2"> <label className="block text-xs font-bold text-gray-600 mb-1"> {eraEventType === 'unification' ? '統合する国 (複数可)' : eraEventType === 'annexation' ? '併合する国 (複数可)' : '分割する国 (複数可)'} </label> <div className="border rounded bg-white p-2 max-h-32 overflow-y-auto custom-scrollbar"> {nations.filter(n => n.id !== editingNation.id).map(n => ( <label key={n.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 cursor-pointer"><input type="checkbox" checked={eraRelatedNationIds.includes(n.id)} onChange={() => toggleRelatedNationId(n.id)} className="rounded text-blue-600" />{n.flag && <img src={n.flag} className="w-4 h-3 object-cover border border-gray-200" />}<span className="text-xs">{n.name}</span></label> ))} </div> </div> )} </div> </div> <div className="space-y-2"> <p className="text-[10px] font-bold text-gray-500">体制詳細</p> <div className="grid grid-cols-2 gap-2"> {NATION_PARAMS.map(param => ( <div key={param.key} className="bg-white p-1.5 rounded border border-gray-200 text-xs"> <div className="flex justify-between items-center mb-1"><span className="font-bold text-[10px] text-gray-600">{param.label}</span><input type="color" value={eraParams[param.key]?.color || param.defaultColor} onChange={e => updateEraParam(param.key, 'color', e.target.value)} className="w-3 h-3 rounded cursor-pointer border-none" /></div> <input type="text" placeholder="名称 (例: 立憲君主制)" value={eraParams[param.key]?.name || ''} onChange={e => updateEraParam(param.key, 'name', e.target.value)} className="w-full p-1 border rounded mb-1 text-[10px] font-bold" /> <input type="text" placeholder="一言メモ (例: 王は法の下に...)" value={eraParams[param.key]?.desc || ''} onChange={e => updateEraParam(param.key, 'desc', e.target.value)} className="w-full p-1 border-b border-gray-100 text-[9px] text-gray-500 outline-none bg-transparent" /> </div> ))} </div> </div> </div> )} <div className="text-right mt-4"> <button onClick={saveEra} className={`w-full text-white px-4 py-2 rounded font-bold shadow transition-colors flex justify-center items-center gap-2 text-sm ${eraMode === 'collapse' ? 'bg-red-700 hover:bg-red-800' : eraMode === 'birth' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-900 hover:bg-blue-800'}`}> {editingEraIndex !== null ? <Icons.Save size={14} /> : <Icons.Plus size={14} />} {editingEraIndex !== null ? '更新する' : (eraMode === 'collapse' ? '滅亡を記録' : eraMode === 'birth' ? '誕生を記録' : '変遷を追加')} </button> </div> </div> <div className="w-full lg:w-1/3 space-y-4"> <h5 className="font-bold text-xs text-gray-500">変遷リスト</h5> <div className="space-y-2"> {editingNation.eras && editingNation.eras.length > 0 ? ( editingNation.eras.sort((a,b) => b.startYear - a.startYear).map((era, index) => { const eventType = era.event?.type || 'none'; const eventDef = ERA_EVENT_TYPES[eventType]; const targetIds = era.event?.targetIds || (era.event?.targetId ? [era.event.targetId] : []); const targetNames = targetIds.map(tid => { const n = nations.find(nav => nav.id === tid); return n ? n.name : ''; }).filter(n => n).join('・'); let badgeLabel = "改称・変更"; let badgeClass = "bg-gray-100 text-gray-600 border-gray-200"; if (era.type === 'collapse') { const baseLabel = (eventDef && eventType !== 'none') ? eventDef.label : "滅亡"; badgeLabel = targetNames ? `${targetNames}${baseLabel}` : baseLabel; badgeClass = "bg-red-100 text-red-600 border-red-200"; } else if (['foundation', 'independence', 'splinter', 'unification', 'foundation_puppet'].includes(eventType)) { const baseLabel = eventDef ? eventDef.label : "誕生"; badgeLabel = targetNames ? `${targetNames}${baseLabel}` : baseLabel; badgeClass = "bg-green-100 text-green-800 border-green-200"; } else if (['puppet', 'be_puppet', 'annexation', 'partition', 'regime_change'].includes(eventType)) { const baseLabel = eventDef ? eventDef.label : "変遷"; badgeLabel = targetNames ? `${targetNames}${baseLabel}` : baseLabel; badgeClass = "bg-indigo-50 text-indigo-700 border-indigo-100"; } return ( <div key={index} className="bg-white border rounded p-2 flex justify-between items-center text-sm"> <div className="flex items-center gap-2"> <span className="font-mono font-bold text-gray-600 w-10 text-right text-xs">{era.startYear}年</span> {(era.flag || editingNation.flag) ? ( <img src={era.flag || editingNation.flag} className="w-8 h-5 object-cover border border-gray-200 shadow-sm flex-shrink-0" alt="flag" /> ) : ( <div className="w-8 h-5 bg-gray-100 border border-gray-200 flex-shrink-0"></div> )} <div className="flex flex-col"> <span className={`leading-tight text-xs font-bold ${era.type === 'collapse' ? 'text-gray-400 line-through' : ''}`}>{era.name}</span> <div className="mt-0.5"> <span className={`text-[9px] px-1.5 py-0.5 rounded border ${badgeClass} inline-flex items-center gap-0.5`}> {eventDef && eventDef.icon} {badgeLabel} </span> </div> </div> </div> <div className="flex gap-1"><button onClick={() => startEditEra(index)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><Icons.Edit2 size={14} /></button><button onClick={() => deleteEra(index)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Icons.Trash2 size={14} /></button></div> </div> ); }) ) : ( <p className="text-gray-400 text-xs text-center py-4">記録なし</p> )} </div> </div> </div> </section> </div> </div> ) : ( <div className="bg-white p-12 rounded-lg shadow-lg border border-gray-200 text-center text-gray-400"> <Icons.Globe size={48} className="mx-auto mb-4 text-gray-300"/> <p>左のリストから国家を選択するか、<br/>新規追加してください。</p> </div> )} </div> </div> </div> );
+};
+
+const SimpleLineChart = ({ title, data, nations, getValue, formatValue, icon: Icon, dataType }) => {
+    const [includeRefScale, setIncludeRefScale] = useState(false);
+    const sortedData = [...data].sort((a, b) => a.year - b.year);
+    const years = [...new Set(sortedData.map(d => d.year))];
+    if (years.length === 0) return <div className="bg-white p-8 rounded-lg shadow text-center text-gray-400">データがありません</div>;
+    let maxValue = 0; sortedData.forEach(d => { const val = getValue(d); if (val > maxValue) maxValue = val; });
+    let refData = [];
+    if (dataType && ['population', 'gdp', 'perCapita'].includes(dataType)) {
+            const minYear = Math.min(...years); const maxYear = Math.max(...years);
+            refData = US_STATS.map(d => ({ ...d, year: d.year - AD_OFFSET })).filter(d => d.year >= minYear - 50 && d.year <= maxYear + 50);
+            if (includeRefScale) { refData.forEach(d => { let val = 0; if (dataType === 'population') val = d.population; else if (dataType === 'gdp') val = d.gdp; else if (dataType === 'perCapita') val = Math.round(d.gdp / d.population); if (val > maxValue) maxValue = val; }); }
+    }
+    if (maxValue === 0) maxValue = 100; const yMax = maxValue * 1.2;
+    const width = 600; const height = 300; const padding = { top: 30, right: 30, bottom: 50, left: 80 }; const graphWidth = width - padding.left - padding.right; const graphHeight = height - padding.top - padding.bottom;
+    const getX = (year) => { const index = years.indexOf(year); if (years.length === 1) return padding.left + graphWidth / 2; return padding.left + (index / (years.length - 1)) * graphWidth; };
+    const getXByYear = (year) => { const minYear = Math.min(...years); const maxYear = Math.max(...years); if (maxYear === minYear) return padding.left + graphWidth / 2; return padding.left + ((year - minYear) / (maxYear - minYear)) * graphWidth; };
+    const getY = (value) => padding.top + graphHeight - ((value / yMax) * graphHeight);
+    const yGridLines = [0, 1, 2, 3, 4].map(i => { const val = (yMax / 5) * i; const y = getY(val); return ( <g key={i}> <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="#f0f0f0" strokeWidth="1" /> <text x={padding.left - 10} y={y + 5} textAnchor="end" fontSize="12" fill="#999">{formatValue(val, true)}</text> </g> ); });
+    let refLine = null;
+    if (refData.length > 0) { const points = refData.map(d => { let val = 0; if (dataType === 'population') val = d.population; else if (dataType === 'gdp') val = d.gdp; else if (dataType === 'perCapita') val = Math.round(d.gdp / d.population); const y = getY(val); return `${getXByYear(d.year)},${y}`; }).join(' '); refLine = ( <g className="opacity-50"> <polyline points={points} fill="none" stroke="#cbd5e1" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" /> {refData.length > 0 && ( <text x={getXByYear(refData[refData.length-1].year)} y={getY(dataType === 'population' ? refData[refData.length-1].population : (dataType === 'gdp' ? refData[refData.length-1].gdp : refData[refData.length-1].gdp/refData[refData.length-1].population)) - 10} textAnchor="middle" fontSize="10" fill="#94a3b8" fontWeight="bold">USA</text> )} </g> ); }
+    const lines = nations.map(nation => { const nationStats = sortedData.filter(d => { if (d.nationId !== nation.id) return false; const info = getNationInfo(nation, d.year); return !info.isCollapsed && !info.isFuture; }).sort((a, b) => a.year - b.year); if (nationStats.length === 0) return null; const points = nationStats.map(d => `${getX(d.year)},${getY(getValue(d))}`).join(' '); return ( <g key={nation.id}> <polyline points={points} fill="none" stroke={nation.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="opacity-60" /> {nationStats.map(d => { const info = getNationInfo(nation, d.year); return ( <g key={d.id} className="group/point"> <circle cx={getX(d.year)} cy={getY(getValue(d))} r="6" fill="white" stroke={info.color} strokeWidth="2.5" className="cursor-pointer hover:r-8 transition-all" /> <g className="opacity-0 group-hover/point:opacity-100 transition-opacity pointer-events-none z-50"> <rect x={Math.min(Math.max(getX(d.year) - 70, 0), width - 140)} y={getY(getValue(d)) - 65} width="140" height="55" rx="4" fill="rgba(0,0,0,0.9)" /> <text x={Math.min(Math.max(getX(d.year), 70), width - 70)} y={getY(getValue(d)) - 45} textAnchor="middle" fill="white" fontSize="11"> {d.year}年 ({info.name}) </text> <text x={Math.min(Math.max(getX(d.year), 70), width - 70)} y={getY(getValue(d)) - 25} textAnchor="middle" fill="white" fontSize="13" fontWeight="bold"> {formatValue(getValue(d), false)} </text> </g> </g> ); })} </g> ); });
+    return ( <div className="bg-white p-4 rounded-lg shadow-lg border border-gray-200 mb-8"> <div className="flex flex-wrap items-center justify-between mb-4 border-b pb-2 gap-2"> <div className="flex items-center gap-2"> <div className="p-2 bg-gray-100 rounded-full text-gray-700"><Icon size={20} /></div> <h3 className="text-lg font-bold text-gray-800">{title}</h3> </div> <div className="flex items-center gap-4 text-xs"> <div className="flex items-center gap-2 text-gray-400"> <span className="w-4 h-0.5 bg-gray-300 border border-gray-300 border-dashed inline-block"></span> アメリカ (史実参考: 西暦-{AD_OFFSET}年) </div> <label className="flex items-center gap-1 cursor-pointer bg-gray-50 px-2 py-1 rounded border hover:bg-gray-100 transition-colors"> <input type="checkbox" checked={includeRefScale} onChange={(e) => setIncludeRefScale(e.target.checked)} className="rounded text-blue-600" /> <span>基準データに合わせて縮小</span> </label> </div> </div> <div className="w-full overflow-hidden"> <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto bg-gray-50 rounded border border-gray-100"> {yGridLines} {refLine} {years.map((year, i) => { const showLabel = years.length <= 10 || i % Math.ceil(years.length / 10) === 0 || i === years.length - 1; if (!showLabel) return null; return (<text key={year} x={getX(year)} y={height - 15} textAnchor="middle" fontSize="12" fill="#555" fontWeight="bold">{year}</text>); })} {lines} </svg> </div> <div className="flex flex-wrap gap-3 mt-4 justify-center"> {nations.map(n => (<div key={n.id} className="flex items-center gap-1.5 text-xs font-bold text-gray-600 bg-gray-50 px-2 py-1 rounded border border-gray-200"><div className="w-3 h-3 rounded-full" style={{backgroundColor: n.color}}></div>{n.name}</div>))} </div> </div> );
+};
+const GraphView = ({ setView, stats, nations }) => ( <div className="space-y-6 animate-fade-in pb-20"> <div className="flex items-center gap-4 mb-2"><button onClick={() => setView('timeline')} className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 font-bold rounded-lg shadow hover:bg-gray-50 transition-colors border border-gray-200"><Icons.ArrowLeft size={20} /> 年表へ戻る</button></div> <SectionHeader icon={Icons.TrendingUp} title="国家統計データ分析" desc="登録された全統計データを、期間に合わせて等間隔で配置・可視化します。" /> <div className="grid grid-cols-1 md:grid-cols-2 gap-6"> <div className="h-full"><SimpleLineChart title="総人口推移" data={stats} nations={nations} getValue={(d) => d.population} formatValue={(v, isShort) => formatJapaneseNumber(v, '人', isShort)} icon={Icons.Users} dataType="population" /></div> <div className="h-full"><SimpleLineChart title="GDP (国内総生産) 推移" data={stats} nations={nations} getValue={(d) => d.gdp} formatValue={(v, isShort) => formatJapaneseNumber(v, '円', isShort)} icon={Icons.BarChart2} dataType="gdp" /></div> <div className="h-full"><SimpleLineChart title="一人あたりGDP (豊かさ) 推移" data={stats} nations={nations} getValue={(d) => calculatePerCapita(d.gdp, d.population)} formatValue={(v, isShort) => formatJapaneseNumber(v, '円', isShort)} icon={Icons.DollarSign} dataType="perCapita" /></div> <div className="bg-gray-100 border-4 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center text-gray-400 p-8 min-h-[300px] shadow-inner mb-8"><div className="bg-yellow-400 text-black p-4 rounded-full mb-4 shadow-md animate-pulse"><Icons.Settings size={32} /></div><span className="font-bold text-xl text-gray-500 mb-1">工事中</span><span className="text-xs text-gray-400">Future Feature...</span></div> </div> </div> );
+
+// --- GenealogyView コンポーネント (高さ自動補正修正版) ---
+        const GenealogyView = ({ setView, nations, stats, entries, setSelectedEntry, uiScale = 100 }) => {
+            const [yearHeight, setYearHeight] = useState(5);
+            const [laneWidth, setLaneWidth] = useState(80);
+            const [showMarkers, setShowMarkers] = useState(true);
+            const [showConnections, setShowConnections] = useState(true);
+            const HEADER_HEIGHT = 50;
+
+            const { nationBlocks, renderSegments, connections, minYear, maxYear, lanesCount, continentZones } = useMemo(() => {
+                const blocks = []; 
+                let gMin = 10000, gMax = -10000;
+                nations.forEach(n => {
+                    const info = getNationInfo(n, 9999); 
+                    let start = info.nationStartYear || DEFAULT_YEAR;
+                    let end = info.nationEndYear || (new Date().getFullYear() + 50); 
+                    const nStats = stats.filter(s => s.nationId === n.id);
+                    if (nStats.length > 0) { const sMin = Math.min(...nStats.map(s => s.year)); if (sMin < start) start = sMin; }
+                    if (start < gMin) gMin = start; if (end > gMax) gMax = end;
+                    blocks.push({ ...n, start, end, lane: 0, location: n.location || 'unknown', rank: n.rank || 'minor_power' });
+                });
+                if (nations.length === 0) { gMin = DEFAULT_YEAR; gMax = DEFAULT_YEAR + 100; } else { gMin -= 10; gMax += 20; }
+
+                const sortedLocKeys = Object.keys(LOCATIONS).sort((a, b) => LOCATIONS[a].order - LOCATIONS[b].order);
+                let totalLanesOffset = 0;
+                const continentZones = [];
+                sortedLocKeys.forEach(locKey => {
+                    const locBlocks = blocks.filter(b => b.location === locKey);
+                    if (locBlocks.length === 0) return;
+                    locBlocks.sort((a, b) => {
+                        const rankA = NATION_RANKS[a.rank]?.order || 99;
+                        const rankB = NATION_RANKS[b.rank]?.order || 99;
+                        if (rankA !== rankB) return rankA - rankB;
+                        return a.start - b.start;
+                    });
+                    const lanes = [];
+                    locBlocks.forEach(block => {
+                        let assigned = false;
+                        for (let i = 0; i < lanes.length; i++) {
+                            if (lanes[i] < block.start) { block.lane = totalLanesOffset + i; lanes[i] = block.end + 5; assigned = true; break; }
+                        }
+                        if (!assigned) { block.lane = totalLanesOffset + lanes.length; lanes.push(block.end + 5); }
+                    });
+                    continentZones.push({ key: locKey, label: LOCATIONS[locKey].label, color: LOCATIONS[locKey].color, startLane: totalLanesOffset, endLane: totalLanesOffset + lanes.length });
+                    totalLanesOffset += lanes.length + 1;
+                });
+
+                const segments = [];
+                blocks.forEach(block => {
+                    const eras = (block.eras || []).sort((a, b) => a.startYear - b.startYear);
+                    const validEras = eras.filter(e => e.startYear >= block.start && e.startYear < block.end);
+                    let currentStart = block.start;
+                    let currentParams = block.params || {};
+                    let activeState = { name: block.name, flag: block.flag, color: block.color, params: currentParams };
+                    let activeType = 'foundation';
+
+                    validEras.forEach(era => {
+                        const nextParams = { ...currentParams, ...(era.params || {}) };
+                        const nextState = { name: era.name || block.name, flag: era.flag || block.flag, color: era.color || block.color, params: nextParams };
+                        if (era.startYear === currentStart) {
+                            activeState = nextState; currentParams = nextParams; activeType = era.type;
+                        } else {
+                            const prevGovColor = activeState.params?.ideology_gov?.color;
+                            const nextGovColor = nextState.params?.ideology_gov?.color;
+                            const isDifferent = nextState.name !== activeState.name || nextState.flag !== activeState.flag || nextState.color !== activeState.color || prevGovColor !== nextGovColor;
+                            if (isDifferent) {
+                                segments.push({ id: `${block.id}_${currentStart}`, nationId: block.id, lane: block.lane, start: currentStart, end: era.startYear, ...activeState, type: activeType, rank: block.rank });
+                                currentStart = era.startYear; activeState = nextState; currentParams = nextParams; activeType = era.type;
+                            } else {
+                                activeType = era.type; currentParams = nextParams; activeState.params = nextParams;
+                            }
+                        }
+                    });
+                    segments.push({ id: `${block.id}_last`, nationId: block.id, lane: block.lane, start: currentStart, end: block.end, ...activeState, type: activeType, rank: block.rank });
+                });
+
+                const conns = [];
+                nations.forEach(n => {
+                    (n.eras || []).forEach(era => {
+                        if (!era.event) return;
+                        const targets = era.event.targetIds || (era.event.targetId ? [era.event.targetId] : []);
+                        targets.forEach(targetId => {
+                            const targetBlock = blocks.find(b => b.id === targetId);
+                            const selfBlock = blocks.find(b => b.id === n.id);
+                            if (!targetBlock || !selfBlock) return;
+                            const year = era.startYear; const type = era.event.type;
+                            if (['independence', 'splinter'].includes(type)) conns.push({ from: targetBlock, to: selfBlock, year, type });
+                            else if (['lose_independence', 'lose_splinter'].includes(type)) conns.push({ from: selfBlock, to: targetBlock, year, type: type.replace('lose_', '') });
+                            else if (['annexed_by', 'merger', 'partitioned_by', 'dissolution'].includes(type)) conns.push({ from: selfBlock, to: targetBlock, year, type });
+                            else if (['annexation', 'unification', 'partition'].includes(type)) { let mappedType = type; if (type === 'annexation') mappedType = 'annexed_by'; if (type === 'unification') mappedType = 'merger'; if (type === 'partition') mappedType = 'partitioned_by'; conns.push({ from: targetBlock, to: selfBlock, year, type: mappedType }); }
+                            else if (['foundation_puppet', 'be_puppet', 'puppet'].includes(type)) conns.push({ from: targetBlock, to: selfBlock, year, type });
+                        });
+                    });
+                });
+                const uniqueConns = []; const connSet = new Set();
+                conns.forEach(c => { const key = `${c.from.id}-${c.to.id}-${c.type}-${c.year}`; if (!connSet.has(key)) { connSet.add(key); uniqueConns.push(c); } });
+                return { nationBlocks: blocks, renderSegments: segments, connections: uniqueConns, minYear: gMin, maxYear: gMax, lanesCount: totalLanesOffset, continentZones };
+            }, [nations, stats]);
+
+            const legendaryEvents = useMemo(() => {
+                if (!entries) return [];
+                return entries.filter(e => (e.importance || 2) >= 5).sort((a, b) => a.year - b.year);
+            }, [entries]);
+
+            // ズーム倍率(uiScale)を考慮して内部描画領域の高さを計算
+            const zoomFactor = 100 / uiScale;
+            const calculatedContentHeight = (maxYear - minYear) * yearHeight + HEADER_HEIGHT + (600 * zoomFactor);
+            
+            const getY = (year) => (year - minYear) * yearHeight + HEADER_HEIGHT + 20;
+            const getX = (lane) => lane * laneWidth + 120; 
+            const TOTAL_WIDTH = Math.max(1000, lanesCount * laneWidth + 160);
+
+            // ★UIスケーリング補正: 画面の高さからヘッダー分を引き、ズーム倍率で逆補正して拡大する
+            // これにより、ズームアウト(50%など)しても、コンテナは画面下端まで届くようになる
+            const containerHeight = `calc((100vh - 120px) * ${zoomFactor})`;
+
+            return (
+                <div className="space-y-4 animate-fade-in pb-2 flex flex-col" style={{ height: containerHeight, minHeight: '500px' }}>
+                    <div className="flex flex-wrap items-center justify-between gap-4 shrink-0">
+                        <button onClick={() => setView('timeline')} className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 font-bold rounded-lg shadow hover:bg-gray-50 transition-colors border border-gray-200"><Icons.ArrowLeft size={20} /> 年表へ戻る</button>
+                        <div className="flex items-center gap-4 bg-white px-4 py-2 rounded-lg shadow border border-gray-200">
+                            <div className="flex items-center gap-1">
+                                <button onClick={() => setShowMarkers(!showMarkers)} className={`flex items-center gap-1 px-3 py-1 rounded-l text-xs font-bold border transition-colors ${showMarkers ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}><Icons.Tag size={14}/> {showMarkers ? 'イベントON' : 'イベントOFF'}</button>
+                                <button onClick={() => setShowConnections(!showConnections)} className={`flex items-center gap-1 px-3 py-1 rounded-r text-xs font-bold border-t border-b border-r transition-colors ${showConnections ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}><Icons.GitMerge size={14}/> {showConnections ? '関係線ON' : '関係線OFF'}</button>
+                            </div>
+                            <div className="h-4 w-px bg-gray-300"></div>
+                            <div className="flex items-center gap-2"><span className="text-xs font-bold text-gray-600">縦縮尺</span><input type="range" min="1" max="20" step="0.5" value={yearHeight} onChange={e => setYearHeight(parseFloat(e.target.value))} className="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-900" /></div>
+                            <div className="h-4 w-px bg-gray-300"></div>
+                            <div className="flex items-center gap-2"><span className="text-xs font-bold text-gray-600">横幅</span><input type="range" min="40" max="200" step="10" value={laneWidth} onChange={e => setLaneWidth(parseInt(e.target.value))} className="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-900" /></div>
+                        </div>
+                    </div>
+
+                    <SectionHeader icon={Icons.GitMerge} title="国家興亡系譜図" desc="国家の誕生、独立、併合の歴史的な流れを、時系列の樹形図として可視化します。" />
+                    
+                    <div className="bg-white rounded-lg shadow-xl border border-gray-200 overflow-auto custom-scrollbar flex-grow relative">
+                        <div className="relative" style={{ height: `${Math.max(calculatedContentHeight, 800)}px`, width: `${TOTAL_WIDTH}px` }}>
+                            <div className="sticky top-0 z-50 w-full bg-white shadow-sm" style={{ height: HEADER_HEIGHT }}>
+                                {continentZones.map((zone, i) => {
+                                    const isFirst = i === 0; const isLast = i === continentZones.length - 1;
+                                    const startX = isFirst ? getX(zone.startLane) : getX(zone.startLane) - (laneWidth / 2);
+                                    const endX = getX(zone.endLane) + (laneWidth / 2); const width = endX - startX;
+                                    return ( <div key={zone.key} className="absolute top-0 flex items-center justify-center font-bold text-sm text-white select-none" style={{ left: startX, width: width, height: HEADER_HEIGHT, backgroundColor: zone.color, borderRight: isLast ? 'none' : '1px solid rgba(255,255,255,0.4)', boxSizing: 'border-box' }}>{zone.label}</div> );
+                                })}
+                            </div>
+                            {continentZones.map((zone, i) => {
+                                const isFirst = i === 0; const isLast = i === continentZones.length - 1;
+                                const startX = isFirst ? getX(zone.startLane) : getX(zone.startLane) - (laneWidth / 2);
+                                const endX = getX(zone.endLane) + (laneWidth / 2); const width = endX - startX;
+                                return ( <div key={`bg-${zone.key}`} className="absolute top-0 bottom-0 pointer-events-none bg-gray-50/20" style={{ left: startX, width: width, top: HEADER_HEIGHT, borderRight: isLast ? 'none' : '2px solid #e5e7eb' }} /> );
+                            })}
+                            {Array.from({ length: Math.max(0, Math.ceil((maxYear - minYear) / 10) + 1) }).map((_, i) => {
+                                const year = minYear + (i * 10); const y = getY(year);
+                                if (yearHeight < 2 && i % 5 !== 0) return null; if (yearHeight < 4 && i % 2 !== 0) return null;
+                                return ( <div key={year} className="absolute w-full border-t border-gray-100 text-[10px] text-gray-300 pl-2 pointer-events-none flex items-center" style={{ top: y }}><span className="bg-white/80 pr-1">{year}</span></div> );
+                            })}
+                            
+                            {showMarkers && legendaryEvents.map(e => {
+                                const top = getY(e.year);
+                                if (top < HEADER_HEIGHT || top > calculatedContentHeight) return null;
+                                const isMyth = (e.importance || 2) === 6;
+                                const markerBg = isMyth ? 'bg-rose-600' : 'bg-yellow-500';
+                                const markerRing = isMyth ? 'ring-rose-300' : 'ring-yellow-200';
+                                const popupBorder = isMyth ? 'border-rose-400' : 'border-yellow-400';
+                                const dashedLine = isMyth ? 'border-rose-300' : 'border-yellow-300';
+                                const iconChar = isMyth ? '✦' : '★';
+                                return (
+                                    <div key={e.id} className="absolute left-4 z-30 group" style={{ top: top - 12 }}>
+                                        <div className={`w-6 h-6 ${markerBg} rounded-full border-2 border-white shadow-md flex items-center justify-center text-white text-xs font-bold ring-2 ${markerRing} group-hover:scale-110 transition-transform cursor-pointer relative z-40`} onClick={(ev) => { ev.stopPropagation(); setSelectedEntry(e); setView('detail'); }} title="詳細を表示">{iconChar}</div>
+                                        <div className={`absolute left-8 top-0 bg-white/90 backdrop-blur border ${popupBorder} px-2 py-1 rounded shadow-sm text-xs font-bold text-gray-800 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none max-w-[200px] truncate z-50`}>{e.year}年: {e.title}</div>
+                                        <div className={`absolute left-3 top-3 border-t ${dashedLine} border-dashed opacity-0 group-hover:opacity-50 pointer-events-none z-30`} style={{ width: `${TOTAL_WIDTH - 40}px` }}></div>
+                                    </div>
+                                );
+                            })}
+
+                            {renderSegments.map(seg => {
+                                const top = getY(seg.start);
+                                const height = Math.max(yearHeight * 2, getY(seg.end) - top);
+                                const left = getX(seg.lane);
+                                const isCollapsed = seg.end < 3000 && (seg.type === 'collapse' || seg.type === 'annexed_by' || seg.type === 'merger'); 
+                                const isTiny = yearHeight < 1.5 || laneWidth < 60;
+                                
+                                const govColor = seg.params?.ideology_gov?.color;
+                                const bgColor = isCollapsed ? '#e5e7eb' : (govColor || '#ffffff'); 
+                                const textColor = isCollapsed ? '#6b7280' : '#000000';
+                                const textShadow = isCollapsed ? 'none' : '0px 0px 3px #ffffff, 0px 0px 3px #ffffff, 0px 0px 3px #ffffff';
+                                const opacity = isCollapsed ? 0.6 : 1;
+
+                                return (
+                                    <div key={seg.id} 
+                                        className="absolute rounded shadow-sm hover:z-10 hover:shadow-lg transition-all flex flex-col items-center justify-start"
+                                        style={{
+                                            top: `${top}px`, left: `${left}px`, width: `${laneWidth - 10}px`, height: `${height}px`, 
+                                            backgroundColor: bgColor, borderColor: '#000000', borderWidth: isTiny ? '1px' : '2px', borderStyle: 'solid', color: textColor, opacity: opacity, textShadow: textShadow, fontWeight: 'bold'
+                                        }}
+                                        title={`${seg.name} (${seg.start} - ${seg.end < 3000 ? seg.end : '...'})`}
+                                    >
+                                        <div className="sticky top-[55px] w-full flex flex-col items-center justify-start pt-1 pb-1 bg-inherit rounded-t overflow-hidden">
+                                            {!isTiny && seg.flag && <img src={seg.flag} className="w-6 h-4 object-cover mb-0.5 shadow-sm border border-black/20" />}
+                                            <span className="text-center leading-tight px-1 truncate w-full" style={{fontSize: isTiny ? '8px' : '10px'}}>{seg.name}</span>
+                                            {!isTiny && <span className="text-[9px] font-mono mt-0.5 opacity-80">{seg.start}</span>}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+
+                            {showMarkers && entries.filter(e => (e.importance || 2) <= 4).map(e => {
+                                const top = getY(e.year);
+                                if (top < HEADER_HEIGHT || top > calculatedContentHeight) return null;
+                                if (!e.tags || e.tags.length === 0) return null;
+                                const targetBlocks = nationBlocks.filter(b => e.tags.includes(b.name));
+                                if (targetBlocks.length === 0) return null;
+                                const level = e.importance || 2;
+                                let markerSize = 'w-2 h-2'; let markerColor = 'bg-gray-400'; let markerRing = 'ring-gray-200';
+                                if (level === 4) { markerSize = 'w-4 h-4'; markerColor = 'bg-purple-600'; markerRing = 'ring-purple-200'; } else if (level === 3) { markerSize = 'w-3 h-3'; markerColor = 'bg-blue-500'; markerRing = 'ring-blue-200'; }
+                                return targetBlocks.map(block => {
+                                    if (e.year < block.start || e.year > block.end) return null;
+                                    const left = getX(block.lane) + (laneWidth / 2) - (level === 4 ? 8 : (level === 3 ? 6 : 4)) - 5;
+                                    return (
+                                        <div key={`${e.id}-${block.id}`} className={`absolute z-10 hover:z-50 rounded-full border border-white shadow-sm cursor-pointer group flex justify-center ${markerSize} ${markerColor} ring-2 ${markerRing} hover:scale-150 transition-transform`} style={{ top: top - (level === 4 ? 8 : 4), left: left }} onClick={(ev) => { ev.stopPropagation(); setSelectedEntry(e); setView('detail'); }}>
+                                            <div className="absolute bottom-full mb-1 bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">{e.year}年: {e.title}</div>
+                                        </div>
+                                    );
+                                });
+                            })}
+
+                            {showConnections && (
+                                <svg className="absolute inset-0 pointer-events-none z-20" width="100%" height="100%">
+                                    <defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af" /></marker></defs>
+                                    {connections.map((conn, i) => {
+                                        const x1 = getX(conn.from.lane) + (laneWidth / 2) - 5; const y1 = getY(conn.year);
+                                        const x2 = getX(conn.to.lane) + (laneWidth / 2) - 5; const y2 = getY(conn.year);
+                                        const curveY = Math.min(30, yearHeight * 10);
+                                        const path = `M ${x1} ${y1} C ${x1} ${y1 + curveY}, ${x2} ${y2 - curveY}, ${x2} ${y2}`;
+                                        let strokeColor = "#9ca3af"; let lineText = ""; let isIndependence = false;
+
+                                        if (['independence', 'splinter'].includes(conn.type)) { strokeColor = "#4ade80"; lineText = conn.type === 'splinter' ? "分裂" : "独立"; isIndependence = true; }
+                                        else if (['annexation', 'merger', 'partitioned_by', 'dissolution', 'annexed_by'].includes(conn.type)) { 
+                                            strokeColor = "#f87171"; 
+                                            if (['annexation', 'annexed_by'].includes(conn.type)) lineText = "併合";
+                                            else if (['merger', 'unification'].includes(conn.type)) lineText = "統合";
+                                            else if (['partition', 'partitioned_by'].includes(conn.type)) lineText = "分割";
+                                            else if (conn.type === 'dissolution') lineText = "解体";
+                                            else lineText = "併合";
+                                            isIndependence = false;
+                                        }
+                                        else if (['foundation_puppet', 'be_puppet', 'puppet'].includes(conn.type)) {
+                                            strokeColor = "#a855f7"; lineText = "傀儡"; isIndependence = true;
+                                        }
+
+                                        const midX = (x1 + x2) / 2; const midY = (y1 + y2) / 2 + (isIndependence ? 10 : -10);
+                                        return ( <g key={i}><path d={path} fill="none" stroke={strokeColor} strokeWidth={yearHeight < 2 ? 1 : 2} markerEnd="url(#arrowhead)" opacity="0.8" />{yearHeight > 1.0 && (<g transform={`translate(${midX}, ${midY})`}><rect x="-14" y="-7" width="28" height="14" rx="2" fill="white" stroke={strokeColor} strokeWidth="1" opacity="0.9" /><text x="0" y="4" textAnchor="middle" fontSize="10" fill={strokeColor} fontWeight="bold">{lineText}</text></g>)}</g> );
+                                    })}
+                                </svg>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+const StatsDisplay = ({ year, stats, expandedStatsYears, setExpandedStatsYears, nations }) => {
+    const yearStats = stats.filter(s => s.year === year); if (yearStats.length === 0) return null; const isExpanded = expandedStatsYears.includes(year);
+    return ( <div className="relative my-4 z-10 w-full max-w-3xl mx-auto md:pl-16"> <div className="flex justify-start"> <button onClick={() => setExpandedStatsYears(prev => prev.includes(year) ? prev.filter(y => y !== year) : [...prev, year])} className={`flex items-center gap-2 px-3 py-2 rounded-full text-sm font-bold shadow-sm border transition-all ${isExpanded ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'}`}> <Icons.BarChart2 size={16} /> {year}年の統計データ <span className="text-xs font-normal ml-1">({yearStats.length}カ国)</span> <Icons.ChevronRight size={16} className={isExpanded ? 'rotate-90' : ''} /> </button> </div> {isExpanded && ( <div className="mt-2 bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden animate-fade-in"> <div className="overflow-x-auto"> <table className="w-full text-sm text-left whitespace-nowrap"> <thead className="bg-gray-50 text-xs uppercase text-gray-500"><tr><th className="px-4 py-2">国家</th><th className="px-4 py-2 text-right">人口</th><th className="px-4 py-2 text-right">GDP (円)</th><th className="px-4 py-2 text-right">一人あたりGDP (円)</th></tr></thead> <tbody> {yearStats.map(stat => { const n = nations.find(n => n.id === stat.nationId) || {name:'?',color:'#ccc'}; const info = getNationInfo(n, year); if (info.isCollapsed) return null; return ( <tr key={stat.id} className="border-b last:border-0 hover:bg-gray-50"> <td className="px-4 py-2 font-bold flex gap-2 items-center">{info.flag && <img src={info.flag} className="w-6 h-4 object-cover border border-gray-200" />}<div className="w-2.5 h-2.5 rounded-full" style={{backgroundColor: info.color}}></div>{info.name}</td> <td className="px-4 py-2 text-right font-mono text-gray-600">{formatJapaneseNumber(stat.population, '人')}</td> <td className="px-4 py-2 text-right font-mono text-gray-600">{formatJapaneseNumber(stat.gdp, '円')}</td> <td className="px-4 py-2 text-right font-mono font-bold text-gray-800">{formatJapaneseNumber(calculatePerCapita(stat.gdp, stat.population), '円')}</td> </tr> ) })} </tbody> </table> </div> </div> )} </div> );
+};
+
+const EditForm = ({ entry, onSave, onCancel, nations }) => {
+    const [formData, setFormData] = useState(entry); const [tagInput, setTagInput] = useState(entry.tags ? entry.tags.join(', ') : ''); const currentYear = parseInt(formData.year) || DEFAULT_YEAR;
+    const sortedNations = useMemo(() => { return [...nations].sort((a, b) => { const locA = LOCATIONS[a.location || 'unknown']?.order || 99; const locB = LOCATIONS[b.location || 'unknown']?.order || 99; if (locA !== locB) return locA - locB; const rankA = NATION_RANKS[a.rank || 'minor_power']?.order || 99; const rankB = NATION_RANKS[b.rank || 'minor_power']?.order || 99; return rankA - rankB; }); }, [nations]);
+    const addNationTag = (nationName) => { const currentTags = tagInput.split(',').map(t => t.trim()).filter(t => t !== ''); if (!currentTags.includes(nationName)) { const newTags = [...currentTags, nationName].join(', '); setTagInput(newTags); } };
+    return ( <div className="bg-white p-6 rounded-lg shadow-lg max-w-2xl mx-auto border-2 border-gray-800"> <h2 className="text-2xl font-bold mb-6 text-gray-800 flex items-center gap-2"><Icons.Edit2 size={24} /> 記録を編集</h2> <div className="space-y-6"> <div className="bg-gray-50 p-4 rounded border border-gray-200"> <div className="flex items-center gap-2 mb-2 text-sm font-bold text-gray-700"><Icons.Calendar size={16} /><span>時期設定</span></div> <div className="grid grid-cols-3 gap-4"> <div><label className="block text-xs text-gray-500 mb-1">英覇暦 (年)</label><input type="number" value={formData.year} onChange={e => setFormData({...formData, year: e.target.value})} className="w-full p-2 border rounded" placeholder="必須" /></div> <div><label className="block text-xs text-gray-500 mb-1">月 (任意)</label><select value={formData.month || ''} onChange={e => setFormData({...formData, month: e.target.value})} className="w-full p-2 border rounded"><option value="">-- 不明 --</option>{Object.entries(CUSTOM_MONTHS).map(([num, name]) => <option key={num} value={num}>{name} ({num}月)</option>)}</select></div> <div><label className="block text-xs text-gray-500 mb-1">日 (任意)</label><input type="number" min="1" max="31" value={formData.day || ''} onChange={e => setFormData({...formData, day: e.target.value})} className="w-full p-2 border rounded" placeholder="--" /></div> </div> </div> <div> <label className="block text-sm font-bold text-gray-700 mb-1">重要度</label> <select value={formData.importance || 2} onChange={e => setFormData({...formData, importance: parseInt(e.target.value)})} className="w-full p-2 border-2 border-gray-300 rounded font-bold"> {Object.entries(importanceLevels).map(([level, info]) => <option key={level} value={level}>Lv.{level} {info.label}</option>)} </select> </div> <div className="space-y-2"> <div><label className="block text-xs text-gray-500">ふりがな</label><input type="text" value={formData.reading || ''} onChange={e => setFormData({...formData, reading: e.target.value})} className="w-full p-1 border-b border-gray-300 outline-none text-sm" /></div> <div><label className="block text-sm font-bold text-gray-700 mb-1">タイトル</label><input type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full p-2 border-2 border-gray-300 rounded text-lg font-bold" /></div> </div> <div> <label className="block text-sm font-bold text-gray-700 mb-1">タグ</label> <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)} className="w-full p-2 border border-gray-300 rounded" placeholder="政治, 戦争" /> <div className="mt-2"> <span className="text-xs text-gray-500 mr-2">国家タグを追加:</span> <div className="flex flex-wrap gap-1 mt-1 max-h-32 overflow-y-auto p-1 border rounded bg-gray-50"> <button onClick={() => addNationTag('世界')} className="text-xs bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 px-2 py-1 rounded flex items-center gap-1"><Icons.Globe size={12} /> 世界</button> {sortedNations.map(n => { const info = getNationInfo(n, currentYear); if (info.isCollapsed) return null; const rankColor = NATION_RANKS[n.rank || 'minor_power']?.color || '#ccc'; return ( <button key={n.id} onClick={() => addNationTag(info.name)} className="text-xs bg-white hover:bg-gray-100 border px-2 py-1 rounded flex items-center gap-1" style={{borderColor: rankColor}}> {info.flag && <img src={info.flag} className="w-4 h-3 object-cover border border-gray-200" />} <span style={{color: rankColor, fontWeight: 'bold'}}>{info.name}</span> </button> ); })} </div> </div> </div> <div><label className="block text-sm font-bold text-gray-700 mb-1">詳細記述</label><textarea value={formData.content} onChange={e => setFormData({...formData, content: e.target.value})} className="w-full p-2 border-2 border-gray-300 rounded min-h-[200px]" /></div> <div className="flex justify-end gap-4 pt-4 border-t"> <button onClick={onCancel} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded font-bold">破棄</button> <button onClick={() => {const tagsArray = tagInput.split(',').map(t => t.trim()).filter(t => t !== ''); onSave({ ...formData, tags: tagsArray });}} disabled={!formData.title} className="px-6 py-2 bg-gray-900 text-white rounded hover:bg-gray-800 flex items-center gap-2 font-bold shadow-lg"><Icons.Save size={18} /> 記録する</button> </div> </div> </div> );
+};
+
+const DetailView = ({ entry, onEdit, onClose, onDelete, nations }) => ( <div className="bg-white min-h-screen md:min-h-0 pb-20"> <div className="sticky top-0 bg-white/90 backdrop-blur-sm border-b border-gray-200 p-4 flex justify-between items-center z-10"><button onClick={onClose} className="text-gray-600 hover:text-gray-900 flex items-center gap-1 font-bold"><Icons.ChevronRight className="rotate-180" /> 年表へ戻る</button><div className="flex gap-2"><button onClick={() => onEdit(entry)} className="p-2 text-blue-600 rounded" title="編集"><Icons.Edit2 size={20} /></button><button onClick={() => onDelete(entry.id)} className="p-2 text-red-600 rounded" title="削除"><Icons.Trash2 size={20} /></button></div></div> <div className="max-w-3xl mx-auto p-6 md:p-10"> <div className="flex flex-wrap items-center gap-4 mb-6"><div className="inline-block bg-gray-900 text-white px-4 py-1 rounded-sm font-mono text-xl font-bold shadow-md">{formatDate(entry.year, entry.month, entry.day)}</div><div className={`px-3 py-1 text-sm rounded-full border ${importanceLevels[entry.importance || 2].badge} border-opacity-20`}>{importanceLevels[entry.importance || 2].label}</div></div> <div className="mb-8 pb-4 border-b-4 border-gray-100">{entry.reading && <p className="text-sm text-gray-500 font-medium mb-1">{entry.reading}</p>}<h1 className="text-4xl md:text-5xl font-black text-gray-900 leading-tight">{entry.title}</h1></div> <div className="prose prose-lg text-gray-800 whitespace-pre-wrap leading-loose font-serif">{entry.content || <span className="text-gray-400 italic">記述なし</span>}</div> {entry.tags && entry.tags.length > 0 && (<div className="mt-10 pt-6 border-t border-gray-100"><div className="flex flex-wrap gap-2">{entry.tags.map(tag => <NationTag key={tag} text={tag} nations={nations} year={entry.year} />)}</div></div>)} </div> </div> );
+
+const StatsInputModal = ({ showStatsInput, setShowStatsInput, nations, stats, setStats }) => {
+    const [year, setYear] = useState(DEFAULT_YEAR);
+    const [inputData, setInputData] = useState({});
+    useEffect(() => { const existingStats = stats.filter(s => s.year === parseInt(year)); const map = {}; existingStats.forEach(s => { map[s.nationId] = { population: s.population, gdp: s.gdp }; }); setInputData(map); }, [year, stats]);
+    if (!showStatsInput) return null;
+    const handleInputChange = (nationId, field, value) => { setInputData(prev => ({ ...prev, [nationId]: { ...prev[nationId], [field]: value } })); };
+    const saveStats = () => { const newStats = [...stats.filter(s => s.year !== parseInt(year))]; Object.entries(inputData).forEach(([nationId, data]) => { if (data && (data.population || data.gdp)) { newStats.push({ id: `stats_${year}_${nationId}`, year: parseInt(year), nationId, population: parseFloat(data.population) || 0, gdp: parseFloat(data.gdp) || 0 }); } }); setStats(newStats); setShowStatsInput(false); };
+    return ( <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"> <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 flex flex-col max-h-[90vh]"> <div className="flex justify-between items-center mb-4"><h2 className="text-xl font-bold flex items-center gap-2"><Icons.BarChart2 size={24} /> 統計データ記録</h2><button onClick={() => setShowStatsInput(false)}><Icons.X size={24} /></button></div> <div className="mb-4 flex items-center gap-4 bg-gray-50 p-3 rounded"><label className="font-bold">対象年:</label><input type="number" value={year} onChange={e => setYear(e.target.value)} className="p-2 border rounded w-32 font-bold" /></div> <div className="overflow-y-auto flex-grow custom-scrollbar"><table className="w-full text-sm text-left"><thead className="text-xs uppercase bg-gray-100"><tr><th className="px-4 py-3">国家 (現在の名称)</th><th className="px-4 py-3">人口 (人)</th><th className="px-4 py-3">GDP (円)</th></tr></thead><tbody>{nations.map(n => { const info = getNationInfo(n, year); return (<tr key={n.id} className="border-b"><td className="px-4 py-3 font-bold flex gap-2 items-center">{info.flag && <img src={info.flag} className="w-6 h-4 object-cover border border-gray-300" />}<div className="w-3 h-3 rounded-full" style={{backgroundColor: info.color}}></div>{info.name}</td><td className="px-4 py-3"><input type="number" value={inputData[n.id]?.population || ''} onChange={e => handleInputChange(n.id, 'population', e.target.value)} className="w-full p-2 border rounded" /></td><td className="px-4 py-3"><input type="number" value={inputData[n.id]?.gdp || ''} onChange={e => handleInputChange(n.id, 'gdp', e.target.value)} className="w-full p-2 border rounded" /></td></tr>); })}</tbody></table></div> <div className="mt-4 pt-4 border-t flex justify-end"><button onClick={saveStats} className="bg-gray-900 text-white px-6 py-2 rounded font-bold flex gap-2"><Icons.Save size={18} /> 保存</button></div> </div> </div> );
+};
+
+function TimelineWiki() {
+  const [entries, setEntries] = useState([]);
+  const [nations, setNations] = useState([]);
+  const [stats, setStats] = useState([]);
+  const [view, setView] = useState('timeline');
+  const [selectedEntry, setSelectedEntry] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [showStatsInput, setShowStatsInput] = useState(false);
+  const [expandedStatsYears, setExpandedStatsYears] = useState([]);
+  const [filterTags, setFilterTags] = useState([]);
+  const [filterImportance, setFilterImportance] = useState([]);
+  const [targetNation, setTargetNation] = useState(null);
+  const [uiScale, setUiScale] = useState(100);
+  const fileInputRef = useRef(null);
+  const convertFileInputRef = useRef(null);
+
+  useEffect(() => {
+    const savedData = localStorage.getItem('timeline_wiki_data_v10');
+    if (savedData) { try { setEntries(JSON.parse(savedData)); } catch (e) { console.error(e); } } else { setEntries([{ id: '1', title: '英覇王国の成立', reading: 'えいはおうこくのせいりつ', year: 1825, month: 1, day: 1, content: '初代国王により建国宣言がなされた。', tags: ['建国'], importance: 5 }]); }
+    const savedNations = localStorage.getItem('timeline_wiki_nations_v10');
+    if (savedNations) { try { setNations(JSON.parse(savedNations)); } catch (e) {} } else { setNations([ { id: 'n1', name: '英覇王国', color: '#fbbf24', eras: [] }, { id: 'n2', name: '北方諸国連合', color: '#60a5fa' } ]); }
+    const savedStats = localStorage.getItem('timeline_wiki_stats_v10');
+    if (savedStats) { try { setStats(JSON.parse(savedStats)); } catch (e) {} } else { setStats([ { id: 's1', year: 1825, nationId: 'n1', population: 1500000, gdp: 300000000 }, { id: 's2', year: 1825, nationId: 'n2', population: 800000, gdp: 120000000 }, { id: 's3', year: 1830, nationId: 'n1', population: 1800000, gdp: 45000000000 }, ]); }
+    const savedScale = localStorage.getItem('timeline_wiki_scale');
+    if (savedScale) { setUiScale(parseInt(savedScale)); }
+  }, []);
+
+  useEffect(() => { localStorage.setItem('timeline_wiki_data_v10', JSON.stringify(entries)); }, [entries]);
+  useEffect(() => { localStorage.setItem('timeline_wiki_nations_v10', JSON.stringify(nations)); }, [nations]);
+  useEffect(() => { localStorage.setItem('timeline_wiki_stats_v10', JSON.stringify(stats)); }, [stats]);
+  useEffect(() => { localStorage.setItem('timeline_wiki_scale', uiScale.toString()); }, [uiScale]);
+
+  const handleExport = () => { const fullData = { entries, nations, stats }; const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `英覇暦_全データ_${new Date().toISOString().slice(0,10)}.json`; document.body.appendChild(link); link.click(); document.body.removeChild(link); };
+  const handleImportFile = (event) => { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (e) => { try { const data = JSON.parse(e.target.result); if (window.confirm('警告: 現在のデータをすべて削除し、ファイルの内容に置き換えますか？\nこの操作は取り消せません。')) { const loadedEntries = Array.isArray(data) ? data : (data.entries || []); const loadedNations = !Array.isArray(data) && data.nations ? data.nations : []; const loadedStats = !Array.isArray(data) && data.stats ? data.stats : []; setEntries(loadedEntries); setNations(loadedNations); setStats(loadedStats); alert(`インポート完了しました。\n年表: ${loadedEntries.length}件\n国家: ${loadedNations.length}件\n統計: ${loadedStats.length}件`); } } catch (error) { console.error(error); alert('読み込みに失敗しました。ファイル形式を確認してください。'); } finally { if (fileInputRef.current) fileInputRef.current.value = ''; } }; reader.readAsText(file); };
+  const handleConvertFile = (event) => { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (e) => { try { const data = JSON.parse(e.target.result); if (!window.confirm('既存のデータを保持しつつ、新しい項目のみを追加しますか？')) { if (convertFileInputRef.current) convertFileInputRef.current.value = ''; return; } const loadedEntries = Array.isArray(data) ? data : (data.entries || []); const loadedNations = !Array.isArray(data) && data.nations ? data.nations : []; const loadedStats = !Array.isArray(data) && data.stats ? data.stats : []; const newEntries = loadedEntries.filter(e => { const idExists = entries.some(ex => ex.id === e.id); if (idExists) return false; const contentExists = entries.some(ex => isSameEntry(ex, e)); if (contentExists) return false; return true; }); if (newEntries.length > 0) setEntries(prev => [...prev, ...newEntries]); const newNations = loadedNations.filter(n => !nations.some(ex => ex.id === n.id)); if (newNations.length > 0) setNations(prev => [...prev, ...newNations]); const newStats = loadedStats.filter(s => !stats.some(ex => ex.id === s.id)); if (newStats.length > 0) setStats(prev => [...prev, ...newStats]); if (newEntries.length === 0 && newNations.length === 0 && newStats.length === 0) { alert('新しいデータはありませんでした（すべて重複しています）。'); } else { alert(`コンバート完了:\n年表: ${newEntries.length}件\n国家: ${newNations.length}件\n統計: ${newStats.length}件\nを追加しました。`); } } catch (error) { console.error(error); alert('ファイルの読み込みに失敗しました。形式を確認してください。'); } finally { if (convertFileInputRef.current) convertFileInputRef.current.value = ''; } }; reader.readAsText(file); };
+  const handleCreateNew = () => { const newEntry = { id: Date.now().toString(), title: '', reading: '', year: DEFAULT_YEAR, month: '', day: '', content: '', tags: [], importance: 2 }; setSelectedEntry(newEntry); setIsEditing(true); setView('edit'); };
+  const openSettings = (nation = null) => { setTargetNation(nation); setView('settings'); };
+  
+  const timelineItems = useMemo(() => { const items = []; let filteredEntries = entries; if (searchTerm) { const lowerTerm = searchTerm.toLowerCase(); filteredEntries = filteredEntries.filter(e => e.title.toLowerCase().includes(lowerTerm) || (e.reading && e.reading.toLowerCase().includes(lowerTerm)) || e.content.toLowerCase().includes(lowerTerm) || e.year.toString().includes(lowerTerm)); } if (filterTags.length > 0) filteredEntries = filteredEntries.filter(e => e.tags && filterTags.every(tag => e.tags.includes(tag))); if (filterImportance.length > 0) filteredEntries = filteredEntries.filter(e => filterImportance.includes(e.importance || 2)); filteredEntries.forEach(entry => { items.push({ type: 'entry', year: entry.year, month: entry.month || 0, day: entry.day || 0, data: entry }); }); const statsYears = [...new Set(stats.map(s => s.year))]; statsYears.forEach(year => { if (searchTerm && !year.toString().includes(searchTerm)) return; items.push({ type: 'stats_marker', year: year, month: -1, day: -1, id: `stats_marker_${year}` }); }); return items.sort((a, b) => { if (a.year !== b.year) return a.year - b.year; if (a.month !== b.month) return a.month - b.month; return a.day - b.day; }); }, [entries, stats, searchTerm, filterTags, filterImportance]);
+  const allTags = useMemo(() => { const tags = new Set(); entries.forEach(e => e.tags?.forEach(t => tags.add(t))); return Array.from(tags).sort(); }, [entries]);
+  let entryCounter = 0;
+  const zoomIn = () => setUiScale(prev => Math.min(200, prev + 10));
+  const zoomOut = () => setUiScale(prev => Math.max(30, prev - 10));
+  const zoomReset = () => setUiScale(100);
+
+  return (
+    <div className="min-h-screen bg-[#f0f2f5] font-sans text-gray-800 flex flex-col h-screen overflow-hidden">
+      <input type="file" ref={fileInputRef} onChange={handleImportFile} className="hidden" accept=".json" />
+      <input type="file" ref={convertFileInputRef} onChange={handleConvertFile} className="hidden" accept=".json" />
+      <StatsInputModal showStatsInput={showStatsInput} setShowStatsInput={setShowStatsInput} nations={nations} stats={stats} setStats={setStats} />
+      <header className="bg-[#1a1a1a] text-white p-3 shadow-lg shrink-0 z-50 border-b-4 border-yellow-600 relative">
+        <div className="flex justify-between items-center overflow-x-auto">
+          <div className="flex items-center gap-3 cursor-pointer group mr-4" onClick={() => {setView('timeline'); setSelectedEntry(null);}}>
+            <div className="bg-yellow-600 p-1 rounded text-black shrink-0"><Icons.BookOpen size={20} /></div><h1 className="text-lg font-bold tracking-widest group-hover:text-yellow-500 transition-colors truncate hidden md:block">英覇歴代記</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center bg-gray-700 rounded-lg mr-2 border border-gray-600"><button onClick={zoomOut} className="p-1.5 hover:bg-gray-600 rounded-l text-gray-300" title="縮小"><Icons.Minus size={16}/></button><button onClick={zoomReset} className="text-xs font-mono font-bold w-10 text-center text-yellow-500 hover:text-white" title="リセット">{uiScale}%</button><button onClick={zoomIn} className="p-1.5 hover:bg-gray-600 rounded-r text-gray-300" title="拡大"><Icons.Plus size={16}/></button></div>
+            <div className="flex items-center bg-gray-800 rounded-lg border border-gray-700 mr-2 overflow-hidden shadow-sm">
+                <button onClick={() => openSettings(null)} className={`p-2 transition-colors border-r border-gray-700 ${view === 'settings' ? 'bg-yellow-600 text-black' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'}`} title="国家設定・管理"><Icons.Globe size={20} /></button>
+                <button onClick={() => setView('graph')} className={`p-2 transition-colors border-r border-gray-700 ${view === 'graph' ? 'bg-yellow-600 text-black' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'}`} title="グラフ分析"><Icons.Activity size={20} /></button>
+                <button onClick={() => setView('genealogy')} className={`p-2 transition-colors border-r border-gray-700 ${view === 'genealogy' ? 'bg-yellow-600 text-black' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'}`} title="国家興亡系譜図"><Icons.GitMerge size={20} /></button>
+                <button onClick={() => setView('table')} className={`p-2 transition-colors ${view === 'table' ? 'bg-yellow-600 text-black' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'}`} title="国家体制一覧"><Icons.List size={20} /></button>
+            </div>
+            <div className="flex items-center gap-1 mr-2 border-r border-gray-700 pr-2 hidden sm:flex">
+               <button onClick={handleExport} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors" title="エクスポート"><Icons.Upload size={20} /></button>
+               <button onClick={() => fileInputRef.current.click()} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors" title="インポート"><Icons.Download size={20} /></button>
+               <button onClick={() => convertFileInputRef.current.click()} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors" title="コンバート"><Icons.RefreshCw size={20} /></button>
+               <button onClick={() => setView('help')} className={`p-2 rounded transition-colors ${view === 'help' ? 'bg-yellow-600 text-black' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`} title="ヘルプ"><Icons.HelpCircle size={20} /></button>
+            </div>
+            <div className="flex items-center bg-gray-800 rounded-lg p-0.5">
+              <button onClick={() => setShowStatsInput(true)} className="px-3 py-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded-l font-bold text-sm border-r border-gray-700"><Icons.BarChart2 size={18} /></button>
+              <button onClick={handleCreateNew} className="bg-yellow-600 text-black px-3 md:px-4 py-2 rounded-r font-bold flex items-center gap-2 hover:bg-yellow-500 transition-colors text-sm whitespace-nowrap"><Icons.Plus size={18} /><span className="hidden md:inline">歴史を刻む</span></button>
+            </div>
+          </div>
+        </div>
+      </header>
+      <div className="flex-grow overflow-auto bg-[#f0f2f5] relative w-full h-full">
+          <main className="max-w-5xl mx-auto p-4 origin-top-left" style={{ zoom: uiScale / 100 }}>
+ {view === 'settings' ? (
+               <SettingsView setView={setView} nations={nations} setNations={setNations} targetNation={targetNation} setTargetNation={setTargetNation} />
+            ) : view === 'graph' ? (
+              <GraphView setView={setView} stats={stats} nations={nations} />
+            ) : view === 'genealogy' ? (
+              <GenealogyView 
+                  setView={setView} 
+                  nations={nations} 
+                  stats={stats} 
+                  entries={entries} 
+                  setSelectedEntry={setSelectedEntry}
+                  uiScale={uiScale}
+              />
+            ) : view === 'table' ? (
+              <NationTableView setView={setView} nations={nations} stats={stats} onEditNation={openSettings} onAddNation={() => openSettings(null)}/>
+            ) : view === 'help' ? (
+              <HelpView setView={setView} />
+            ) : view === 'timeline' ? (
+              <div className="animate-fade-in">
+                 <div className="mb-8 sticky top-0 z-20 pt-4">
+                    <div className="relative max-w-2xl mx-auto flex gap-2">
+                       <div className="relative flex-grow">
+                         <Icons.Search className="absolute left-4 top-3.5 text-gray-400" size={20} />
+                         <input type="text" placeholder="検索..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-6 py-3 rounded-lg shadow-lg border-none focus:ring-2 focus:ring-yellow-500 transition-all bg-white/95 backdrop-blur" />
+                       </div>
+                       <button onClick={() => setShowFilters(!showFilters)} className={`p-3 rounded-lg shadow-lg transition-colors flex items-center gap-2 font-bold shrink-0 ${(showFilters || filterTags.length > 0 || filterImportance.length > 0) ? 'bg-yellow-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}>
+                         <Icons.Filter size={20} /><span className="hidden md:inline">条件</span>
+                       </button>
+                    </div>
+                    {showFilters && (
+                      <div className="max-w-2xl mx-auto mt-4 bg-white p-6 rounded-lg shadow-xl border border-gray-200">
+                        <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-gray-700">絞り込み条件</h3><button onClick={() => {setFilterTags([]); setFilterImportance([]);}} className="text-xs text-blue-600 hover:underline">条件をクリア</button></div>
+                        <div className="mb-6"><label className="block text-xs font-bold text-gray-500 mb-2">重要度クラス</label><div className="flex flex-wrap gap-2">{Object.entries(importanceLevels).map(([level, info]) => <button key={level} onClick={() => setFilterImportance(prev => prev.includes(parseInt(level)) ? prev.filter(l => l !== parseInt(level)) : [...prev, parseInt(level)])} className={`px-3 py-1.5 rounded text-sm border transition-all ${filterImportance.includes(parseInt(level)) ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-600 border-gray-200'}`}>{info.label}</button>)}</div></div>
+                        <div><label className="block text-xs font-bold text-gray-500 mb-2">タグ</label><div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-1">{allTags.length > 0 ? allTags.map(tag => <button key={tag} onClick={() => setFilterTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])} className={`px-3 py-1 rounded-full text-xs border flex items-center gap-1 transition-all ${filterTags.includes(tag) ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-gray-50 text-gray-600 border-gray-200'}`}><Icons.Tag size={10} />{tag}</button>) : <span className="text-sm text-gray-400">タグなし</span>}</div></div>
+                      </div>
+                    )}
+                 </div>
+
+                 <div className="relative min-h-[600px] pb-20">
+                   <div className="absolute left-8 md:left-1/2 top-0 bottom-0 w-1.5 bg-gradient-to-b from-gray-800 via-gray-600 to-transparent transform -translate-x-1/2 rounded-full opacity-80"></div>
+                   <div className="space-y-12">
+                     {timelineItems.map((item, index) => {
+                       if (item.type === 'stats_marker') {
+                         const hasEntryInSameYear = timelineItems.some(i => i.type === 'entry' && i.year === item.year);
+                         return (
+                            <div key={item.id} className="relative z-10">
+                               {!hasEntryInSameYear && (
+                                  <>
+                                    <div className="absolute left-1/2 transform -translate-x-1/2 top-4 w-3 h-3 bg-gray-300 rounded-full border-2 border-white"></div>
+                                    <div className="absolute left-1/2 transform -translate-x-1/2 top-8 bg-gray-100 text-gray-500 text-xs font-bold px-2 py-1 rounded shadow-sm border border-gray-200">
+                                      {item.year}年
+                                    </div>
+                                  </>
+                               )}
+                               <StatsDisplay year={item.year} stats={stats} expandedStatsYears={expandedStatsYears} setExpandedStatsYears={setExpandedStatsYears} nations={nations} />
+                            </div>
+                         );
+                       }
+
+                       const entry = item.data;
+                       const level = entry.importance || 2;
+                       const style = importanceLevels[level];
+                       const isRight = entryCounter % 2 !== 0;
+                       entryCounter++;
+                       
+                       let dotStyle = 'w-4 h-4 bg-gray-800 ring-4 ring-gray-200';
+                       if (level === 6) { 
+                           dotStyle = 'w-8 h-8 bg-rose-600 ring-4 ring-rose-200 shadow-xl'; 
+                       } else if (level === 5) { 
+                           dotStyle = 'w-6 h-6 bg-yellow-500 ring-4 ring-yellow-200';
+                       } else if (level === 4) { 
+                           dotStyle = 'w-5 h-5 bg-purple-600 ring-4 ring-purple-200';
+                       }
+
+                       return (
+                         <div key={item.data.id} className={`relative flex flex-col md:flex-row items-center ${isRight ? 'md:flex-row-reverse' : ''}`}>
+                           <div className="absolute left-8 md:left-1/2 transform -translate-x-1/2 z-10 flex flex-col items-center group/date">
+                             <div className={`${dotStyle} rounded-full shadow-lg mb-2 transition-all`}></div>
+                             <div className={`bg-[#1a1a1a] text-xs font-bold px-2 py-1 rounded shadow-sm whitespace-nowrap border flex flex-col items-center ${level === 6 ? 'border-rose-500 text-rose-400' : 'border-gray-700 text-yellow-500'}`}>
+                               <span>{entry.year}年</span>
+                               {entry.month && <span className="text-[10px] text-gray-300 font-normal mt-0.5">{CUSTOM_MONTHS[entry.month]}({entry.month}月){entry.day ? ` ${entry.day}日` : ''}</span>}
+                             </div>
+                           </div>
+                           <div className={`hidden md:block absolute w-[calc(50%-2rem)] border-t-2 ${level >= 4 ? 'border-yellow-500' : 'border-gray-300'} border-dashed ${isRight ? 'left-8' : 'right-8'}`}></div>
+                           <div className="hidden md:block w-1/2"></div>
+                           <div className={`w-full md:w-1/2 pl-16 md:pl-0 p-2 transition-all duration-300 ease-out hover:z-10 ${style.scale} ${isRight ? 'md:pr-12 md:pl-8' : 'md:pl-12 md:pr-8'}`}>
+                             <div onClick={() => { setSelectedEntry(entry); setView('detail'); }} className={`relative cursor-pointer overflow-hidden rounded-lg shadow-md ${style.bg} border-l-4 ${style.color} hover:shadow-xl hover:-translate-y-1 transition-all p-5`}>
+                               <div className="mb-2">{entry.reading && <p className="text-xs text-gray-500 mb-0.5 leading-none">{entry.reading}</p>}<h3 className={`font-bold text-gray-900 leading-tight ${level >= 4 ? 'text-2xl' : 'text-lg'}`}>{entry.title}</h3></div>
+                               <p className="text-gray-600 text-sm line-clamp-3 mb-3">{entry.content || '...'}</p>
+                               <div className="flex flex-wrap gap-1">{entry.tags?.map(tag => <NationTag key={tag} text={tag} nations={nations} year={entry.year} />)}</div>
+                             </div>
+                           </div>
+                         </div>
+                       );
+                     })}
+                     {timelineItems.length === 0 && <div className="text-center py-32"><p className="text-gray-500 font-serif text-lg">記録なし</p></div>}
+                   </div>
+                 </div>
+              </div>
+            ) : view === 'edit' && selectedEntry ? (
+              <EditForm entry={selectedEntry} onSave={(entry) => { const clean = { ...entry, year: parseInt(entry.year)||0, month: entry.month?parseInt(entry.month):null, day: entry.day?parseInt(entry.day):null }; setEntries(prev => prev.some(e => e.id === clean.id) ? prev.map(e => e.id === clean.id ? clean : e) : [...prev, clean]); setIsEditing(false); setSelectedEntry(clean); setView('detail'); }} onCancel={() => { setIsEditing(false); if(!selectedEntry.title) setView('timeline'); else setView('detail'); }} nations={nations} />
+            ) : view === 'detail' && selectedEntry ? (
+              <DetailView entry={selectedEntry} onEdit={() => { setIsEditing(true); setView('edit'); }} onClose={() => { setView('timeline'); setSelectedEntry(null); }} onDelete={(id) => { if(window.confirm('削除しますか？')) { setEntries(prev => prev.filter(e => e.id !== id)); setView('timeline'); setSelectedEntry(null); } }} nations={nations} />
+            ) : null}
+          </main>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<TimelineWiki />);
+</script>
+</body>
+</html>
