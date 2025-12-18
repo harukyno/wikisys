@@ -258,14 +258,36 @@
         };
 
         // 重要度ごとのスタイル定義
-        const getImportanceClass = (imp) => {
+        const getImportanceStyle = (imp) => {
             const v = Number(imp) || 3;
-            if (v >= 5) return 'bg-yellow-900/40 border-yellow-500/50 text-yellow-100';
-            if (v === 4) return 'bg-purple-900/40 border-purple-500/50 text-purple-100';
-            if (v === 3) return 'bg-blue-900/40 border-blue-500/50 text-blue-100';
-            if (v === 2) return 'bg-slate-800/60 border-slate-600/50 text-slate-300';
-            return 'bg-gray-800/60 border-gray-700/50 text-gray-400';
+            if (v >= 5) return {
+                card: 'border-amber-400/60 shadow-[0_0_15px_rgba(251,191,36,0.2)]',
+                tag: 'bg-amber-900/40 border-amber-500/50 text-amber-100',
+                badge: '⭐️⭐️⭐️⭐️⭐️'
+            };
+            if (v === 4) return {
+                card: 'border-purple-400/50 shadow-[0_0_10px_rgba(168,85,247,0.15)]',
+                tag: 'bg-purple-900/40 border-purple-500/50 text-purple-100',
+                badge: '⭐️⭐️⭐️⭐️'
+            };
+            if (v === 3) return {
+                card: 'border-blue-400/30',
+                tag: 'bg-blue-900/40 border-blue-500/50 text-blue-100',
+                badge: '⭐️⭐️⭐️'
+            };
+            if (v === 2) return {
+                card: 'border-slate-600/30',
+                tag: 'bg-slate-800/60 border-slate-600/50 text-slate-300',
+                badge: '⭐️⭐️'
+            };
+            return {
+                card: 'border-gray-700/20 opacity-90',
+                tag: 'bg-gray-800/60 border-gray-700/50 text-gray-400',
+                badge: '⭐️'
+            };
         };
+
+        const getImportanceClass = (imp) => getImportanceStyle(imp).tag;
 
         // ビュー設定：構造年表（Large Timeline）をメインの年表として統合
         const VIEW_TABS = [
@@ -1683,13 +1705,16 @@
                     <div className="flex-1 overflow-y-auto p-4 bg-slate-900 custom-scrollbar w-full">
                         <div className={layoutStyle === 'grid' ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" : "space-y-4"}>
                             {displayArticles.map(article => (
-                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className={`bg-slate-800/50 border border-slate-700 rounded-xl cursor-pointer hover:border-indigo-500 hover:bg-slate-800 transition group flex flex-col ${layoutStyle === 'grid' ? 'h-full' : 'p-6'}`}>
+                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className={`bg-slate-800/50 border rounded-xl cursor-pointer hover:border-indigo-500 hover:bg-slate-800 transition group flex flex-col ${getImportanceStyle(article.importance).card} ${layoutStyle === 'grid' ? 'h-full' : 'p-6'}`}>
                                     {layoutStyle === 'grid' ? (
                                         <>
                                             <div className="p-4 flex-1">
                                                 <div className="flex items-center justify-between text-[10px] text-slate-400 mb-2">
                                                     <span className={`px-1.5 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-100 text-gray-800'}`}>{ARTICLE_TYPES[article.type]?.label || 'その他'}</span>
-                                                    <span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] opacity-70">{getImportanceStyle(article.importance).badge}</span>
+                                                        <span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span>
+                                                    </div>
                                                 </div>
                                                 <h3 className="font-bold text-white group-hover:text-indigo-400 mb-2 flex items-center gap-1 leading-snug">
                                                     {article.isApproved && <Icon name="check-circle" size={14} className="text-emerald-400 shrink-0" />}
@@ -2065,6 +2090,41 @@
             </div>
         );
 
+        const RelatedArticlesList = ({ article, allArticles, onJump }) => {
+            const related = React.useMemo(() => {
+                const keywords = extractLinkedKeywords(article.contentHtml);
+                // Outgoing
+                const outgoing = allArticles.filter(a => keywords.includes(a.title) || keywords.includes(a.id));
+                // Incoming (Backlinks)
+                const incoming = allArticles.filter(a => {
+                    const k = extractLinkedKeywords(a.contentHtml);
+                    return k.includes(article.title) || k.includes(article.id);
+                });
+                // Merge & Dedup
+                const combined = [...outgoing, ...incoming].filter((v, i, arr) => arr.findIndex(t => t.id === v.id) === i && v.id !== article.id);
+                return sortByChronology(combined);
+            }, [article, allArticles]);
+
+            if (related.length === 0) return null;
+
+            return (
+                <div className="mb-6 pl-8">
+                    <div className="mb-2 flex items-center gap-2 text-white/60 text-xs font-bold uppercase tracking-widest">関連する記事 ({related.length})</div>
+                    <div className="flex flex-col gap-2 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                        {related.map(r => (
+                            <div key={r.id} className={`p-2 rounded border cursor-pointer hover:brightness-125 transition ${getImportanceClass(r.importance)}`} onClick={() => onJump && onJump(r)}>
+                                <div className="flex justify-between items-start">
+                                    <span className="text-xs font-bold truncate">{r.title}</span>
+                                    <span className="text-[10px] opacity-70 whitespace-nowrap ml-2">{getArticleYear(r)}年</span>
+                                </div>
+                                <div className="text-[10px] opacity-60 truncate mt-0.5">{ARTICLE_TYPES[r.type]?.label || 'その他'}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
         // --- LargeTimelineView (構造年表: 統合版) ---
         const LargeTimelineView = ({ articles = [], onSelectArticle, onEditArticle, onDeleteArticle, onDuplicateArticle, focusedArticle, onFocusChange, allArticles = [], searchState, onSearchChange, onResetFilters, worldData, appContextId, myRole, onOpenNoYear, onOpenTagArticle, tagArticleValue, onTagArticleValueChange, members = [], onAddMember }) => {
             const [showSearch, setShowSearch] = React.useState(false);
@@ -2325,10 +2385,10 @@
                                                 className="relative pl-12"
                                             >
                                                 <div className="absolute left-3 top-4 w-3 h-3 rounded-full bg-indigo-400 shadow-[0_0_0_4px_rgba(99,102,241,0.25)]"></div>
-                                                <div className="bg-white/5 border border-white/10 rounded-lg p-4 cursor-pointer hover:bg-white/10 hover:border-indigo-500/50 transition group flex flex-col">
+                                                <div className={`bg-white/5 border rounded-lg p-4 cursor-pointer hover:bg-white/10 hover:border-indigo-500/50 transition group flex flex-col ${getImportanceStyle(article.importance).card}`}>
                                                     <div className="flex justify-between items-start mb-1">
                                                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-700 text-gray-300'}`}>{ARTICLE_TYPES[article.type]?.label}</span>
-                                                        <span className="text-[10px] text-yellow-500">{'★'.repeat(article.importance || 3)}</span>
+                                                        <span className="text-[10px]">{getImportanceStyle(article.importance).badge}</span>
                                                         <span className="font-mono text-indigo-300 text-xs font-bold">{getArticleYear(article)}</span>
                                                     </div>
                                                     <h3 className="text-sm font-bold text-white group-hover:text-indigo-300 line-clamp-2">{article.title}</h3>
@@ -2347,7 +2407,7 @@
                                             <div key={article.id} data-article-id={article.id} ref={el => el ? articleRefs.current.set(article.id, el) : articleRefs.current.delete(article.id)} className="w-full flex flex-col relative box-border">
                                                 <div className="w-full flex flex-col md:flex-row items-center md:items-center gap-0 z-10 relative">
                                                     <div className={`flex-1 w-full transition-all duration-500 ${isActive ? 'opacity-100 scale-100' : 'opacity-30 scale-95 grayscale'}`}>
-                                                        <div className="text-left text-gray-800 rounded-2xl shadow-2xl overflow-hidden border-4 relative w-full bg-white border-white/10">
+                                                        <div className={`text-left text-gray-800 rounded-2xl shadow-2xl overflow-hidden border-4 relative w-full bg-white transition-all duration-300 ${getImportanceStyle(article.importance).card}`}>
                                                             <div className="h-32 bg-gradient-to-r from-indigo-900 to-slate-800 p-6 flex items-end relative" onClick={() => { isJumpingRef.current = true; if (onSelectArticle) onSelectArticle(article); scrollToArticle(article.id); setTimeout(() => isJumpingRef.current = false, 500); }}>
                                                                 <h1 className="text-2xl md:text-3xl font-bold text-white z-10 serif flex items-center gap-2">
                                                                     {article.title}
@@ -2394,40 +2454,7 @@
                                                                 <div className="hidden md:block absolute left-[-1px] top-1/2 w-2 h-2 bg-white rounded-full -translate-y-1/2 -translate-x-1/2 shadow-[0_0_10px_white]"></div>
 
                                                                 {/* 関連する記事 (Related Articles) */}
-                                                                {(() => {
-                                                                    const related = React.useMemo(() => {
-                                                                        const keywords = extractLinkedKeywords(article.contentHtml);
-                                                                        // Outgoing
-                                                                        const outgoing = allArticles.filter(a => keywords.includes(a.title) || keywords.includes(a.id));
-                                                                        // Incoming (Backlinks)
-                                                                        const incoming = allArticles.filter(a => {
-                                                                            const k = extractLinkedKeywords(a.contentHtml);
-                                                                            return k.includes(article.title) || k.includes(article.id);
-                                                                        });
-                                                                        // Merge & Dedup
-                                                                        const combined = [...outgoing, ...incoming].filter((v, i, arr) => arr.findIndex(t => t.id === v.id) === i && v.id !== article.id);
-                                                                        return sortByChronology(combined);
-                                                                    }, [article, allArticles]);
-
-                                                                    if (related.length === 0) return null;
-
-                                                                    return (
-                                                                        <div className="mb-6 pl-8">
-                                                                            <div className="mb-2 flex items-center gap-2 text-white/60 text-xs font-bold uppercase tracking-widest">関連する記事 ({related.length})</div>
-                                                                            <div className="flex flex-col gap-2 max-h-60 overflow-y-auto custom-scrollbar pr-2">
-                                                                                {related.map(r => (
-                                                                                    <div key={r.id} className={`p-2 rounded border cursor-pointer hover:brightness-125 transition ${getImportanceClass(r.importance)}`} onClick={() => handleJump(r)}>
-                                                                                        <div className="flex justify-between items-start">
-                                                                                            <span className="text-xs font-bold truncate">{r.title}</span>
-                                                                                            <span className="text-[10px] opacity-70 whitespace-nowrap ml-2">{getArticleYear(r)}年</span>
-                                                                                        </div>
-                                                                                        <div className="text-[10px] opacity-60 truncate mt-0.5">{ARTICLE_TYPES[r.type]?.label || 'その他'}</div>
-                                                                                    </div>
-                                                                                ))}
-                                                                            </div>
-                                                                        </div>
-                                                                    );
-                                                                })()}
+                                                                <RelatedArticlesList article={article} allArticles={allArticles} onJump={handleJump} />
 
                                                                 <div className="mb-2 flex items-center gap-2 text-white/60 text-xs font-bold uppercase tracking-widest pl-8">関連マインドマップ</div>
                                                                 <TagTimelineColumns tags={article.tags} articles={allArticles} onSelectArticle={(item) => handleJump(item)} onTagClick={(t) => { isJumpingRef.current = true; if (onSearchChange) onSearchChange({ tag: t }); }} selectedArticleId={article.id} isTreeMode={true} variant="light" />
