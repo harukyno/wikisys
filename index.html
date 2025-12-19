@@ -1745,10 +1745,12 @@
                                             });
 
                                             // 2. GASへリクエスト送信 (no-corsでも送信はされる)
+                                            // Content-Type: application/json だとPreflight (OPTIONS) が飛び、GASが401/405を返すため
+                                            // text/plain として送り、GAS側で JSON.parse させるのが定石
                                             fetch(proxyUrl, {
                                                 method: 'POST',
                                                 mode: 'no-cors',
-                                                headers: { 'Content-Type': 'application/json' },
+                                                headers: { 'Content-Type': 'text/plain' },
                                                 body: JSON.stringify(payload)
                                             }).then(() => {
                                                 console.log("GAS Request Sent. Waiting for Firestore update at:", requestPath);
