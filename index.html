@@ -600,8 +600,23 @@
                     }
                 }
 
-                return `<div class="googlesheet-container my-4 border rounded overflow-hidden shadow-sm bg-white" style="height:500px">
-                    <iframe src="${embedUrl}" class="w-full h-full border-0"></iframe>
+                // 編集用URL（/editに変更）
+                const editUrl = url.replace(/\/(preview|pubhtml|view|htmlview).*$/, '/edit');
+
+                return `<div class="googlesheet-container my-4 border rounded overflow-hidden shadow-sm bg-white">
+                    <div class="flex items-center justify-between bg-slate-100 px-3 py-1.5 border-b">
+                        <span class="text-xs text-slate-600 font-medium flex items-center gap-1">
+                            <img src="https://www.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png" class="w-4 h-4" />
+                            Googleスプレッドシート
+                        </span>
+                        <a href="${editUrl}" target="_blank" rel="noopener noreferrer" 
+                           class="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 transition-colors font-bold flex items-center gap-1">
+                            ✏️ Googleで編集
+                        </a>
+                    </div>
+                    <div style="height:450px">
+                        <iframe src="${embedUrl}" class="w-full h-full border-0"></iframe>
+                    </div>
                 </div>`;
             }
             if (name === 'datatable') {
@@ -1668,25 +1683,12 @@
                                         return;
                                     }
 
-                                    // Firebaseモジュールの確認
+                                    // JSONP方式ではFirebaseは不要だが、念のためチェック（警告のみ）
                                     if (!window.firebaseModules || !window.db) {
-                                        alert("データベース接続が確立されていません。");
-                                        return;
+                                        console.warn("Firebase未接続ですが、JSONP方式のため続行します。");
                                     }
 
-                                    // 【テスト用】Firebaseサービスアカウント設定
-                                    // GAS側ではなく、ここから秘密鍵を送信して認証させます。
-                                    // ※注意: このファイルが流出すると権限が奪われます。取り扱い注意。
-                                    // ダウンロードしたJSONファイルの中身をここに転記してください。
-                                    const SERVICE_ACCOUNT = {
-                                        client_email: "ここにclient_emailを貼り付け",
-                                        private_key: `-----BEGIN PRIVATE KEY-----
-ここに秘密鍵を貼り付け
------END PRIVATE KEY-----`,
-                                        project_id: "ここにproject_idを貼り付け"
-                                    };
-
-                                    let payload = { firebaseConfig: SERVICE_ACCOUNT };
+                                    let payload = {};
                                     let title = '';
 
                                     if (cloudMode === 'new') {
@@ -1708,75 +1710,55 @@
                                     btn.innerText = "作成中(GAS連携)...";
                                     btn.disabled = true;
 
-                                    // Firestoreでの応答待機用パス
-                                    const requestId = 'req_' + Math.random().toString(36).substr(2, 9);
-                                    // パスは artifacts/{context}/public/data/worlds/{worldId}/requests/{requestId} とする
-                                    const requestPath = `artifacts/${window.appContextId}/public/data/worlds/${window.worldId}/requests/${requestId}`;
-                                    payload.firestorePath = requestPath;
+                                    // JSONPによるGAS連携 (鍵不要・CORS回避)
+                                    const callbackName = 'gas_cb_' + Math.random().toString(36).substr(2, 9);
 
-                                    let unsub = null;
-                                    let timeoutId = null;
-
-                                    try {
-                                        // 1. 完了監視リスナーの設置
-                                        const { doc, onSnapshot, deleteDoc } = window.firebaseModules;
-                                        const requestDocRef = doc(window.db, requestPath);
-
-                                        await new Promise((resolve, reject) => {
-                                            // タイムアウト設定 (30秒)
-                                            timeoutId = setTimeout(() => {
-                                                reject(new Error("応答タイムアウト: GASからの応答がありませんでした。"));
-                                            }, 30000);
-
-                                            unsub = onSnapshot(requestDocRef, (snap) => {
-                                                if (snap.exists()) {
-                                                    const data = snap.data();
-                                                    if (data.status === 'success' && data.url) {
-                                                        // 成功: URL挿入
-                                                        onAction('insertEmbed', `#googlesheet(${data.url})`);
-                                                        alert("シート作成完了！自動挿入しました。");
-                                                        // クリーンアップ
-                                                        deleteDoc(requestDocRef).catch(console.error);
-                                                        resolve();
-                                                    } else if (data.status === 'error') {
-                                                        reject(new Error(data.message || 'Unknown GAS Error'));
-                                                    }
-                                                }
-                                            });
-
-                                            // 2. GASへリクエスト送信 (no-corsでも送信はされる)
-                                            // Content-Type: application/json だとPreflight (OPTIONS) が飛び、GASが401/405を返すため
-                                            // text/plain として送り、GAS側で JSON.parse させるのが定石
-                                            fetch(proxyUrl, {
-                                                method: 'POST',
-                                                mode: 'no-cors',
-                                                headers: { 'Content-Type': 'text/plain' },
-                                                body: JSON.stringify(payload)
-                                            }).then(() => {
-                                                console.log("GAS Request Sent. Waiting for Firestore update at:", requestPath);
-                                            }).catch(reject);
-                                        });
-
-                                        setSheetUrl('');
-                                        setShowPaste('normal');
-
-                                    } catch (err) {
-                                        console.error(err);
-                                        // 自動連携失敗時のフォールバック: 手動入力
-                                        const manually = confirm("自動連携に失敗しました（" + err.message + "）。\nしかし、シート自体は作成されている可能性があります。\n手動でURLを入力しますか？");
-                                        if (manually) {
-                                            const url = prompt("作成されたシートのURLがあれば入力してください。");
-                                            if (url) {
-                                                onAction('insertEmbed', `#googlesheet(${url})`);
-                                                setShowPaste('normal');
-                                            }
-                                        }
-                                    } finally {
-                                        if (unsub) unsub();
+                                    // クリーンアップ関数（先に定義）
+                                    const cleanup = () => {
+                                        delete window[callbackName];
                                         if (timeoutId) clearTimeout(timeoutId);
+                                        const s = document.getElementById(callbackName);
+                                        if (s) s.remove();
                                         btn.innerText = originalText;
                                         btn.disabled = false;
-                                    }
+                                    };
+
+                                    // グローバルコールバック定義
+                                    window[callbackName] = (res) => {
+                                        cleanup();
+                                        if (res.status === 'success' && res.url) {
+                                            onAction('insertEmbed', `#googlesheet(${res.url})`);
+                                            alert("シート作成完了！入力しました。");
+                                            setSheetUrl('');
+                                            setShowPaste('normal');
+                                        } else {
+                                            alert("GASエラー: " + (res.message || '不明なエラー'));
+                                        }
+                                    };
+
+                                    // タイムアウト監視
+                                    const timeoutId = setTimeout(() => {
+                                        cleanup();
+                                        alert("応答タイムアウト: GASからの応答がありませんでした。");
+                                    }, 60000); // 60秒待機
+
+                                    // スクリプトタグ生成 (GETリクエスト)
+                                    const script = document.createElement('script');
+                                    script.id = callbackName;
+
+                                    // URL構築
+                                    const params = new URLSearchParams();
+                                    params.set('callback', callbackName);
+                                    params.set('action', payload.action);
+                                    params.set('title', payload.title);
+                                    if (payload.templateId) params.set('templateId', payload.templateId);
+
+                                    // proxyUrlが既にパラメータ持ってるかチェック
+                                    const joinChar = proxyUrl.includes('?') ? '&' : '?';
+                                    script.src = proxyUrl + joinChar + params.toString();
+
+                                    // 実行
+                                    document.body.appendChild(script);
                                 }}
                                 className="w-full bg-blue-600 text-white hover:bg-blue-700 py-2 rounded text-[11px] font-bold transition-all shadow-sm flex items-center justify-center gap-2"
                             >
