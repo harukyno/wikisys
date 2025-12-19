@@ -1419,6 +1419,49 @@
             );
         };
 
+        // --- Table Inserter ---
+        const TableInserter = ({ onInsert }) => {
+            const [rows, setRows] = React.useState(3);
+            const [cols, setCols] = React.useState(3);
+
+            return (
+                <div className="space-y-2 bg-white border p-2 rounded shadow-sm">
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-gray-500 flex items-center gap-1">
+                            <Icon name="table" size={14} /> 表ブロックの挿入
+                        </label>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                        <div className="flex-1">
+                            <label className="text-[10px] text-gray-400 block mb-0.5 ml-1">行数</label>
+                            <input
+                                type="number" min="1" max="20"
+                                className="w-full border p-1 text-sm rounded focus:border-indigo-500 outline-none"
+                                value={rows}
+                                onChange={e => setRows(parseInt(e.target.value) || 1)}
+                            />
+                        </div>
+                        <div className="text-gray-300 mt-5">×</div>
+                        <div className="flex-1">
+                            <label className="text-[10px] text-gray-400 block mb-0.5 ml-1">列数</label>
+                            <input
+                                type="number" min="1" max="20"
+                                className="w-full border p-1 text-sm rounded focus:border-indigo-500 outline-none"
+                                value={cols}
+                                onChange={e => setCols(parseInt(e.target.value) || 1)}
+                            />
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => onInsert(rows, cols)}
+                        className="w-full bg-indigo-600 text-white hover:bg-indigo-700 py-2 rounded text-xs font-bold transition-all shadow-sm active:scale-95 mt-1"
+                    >
+                        テーブルを挿入
+                    </button>
+                </div>
+            );
+        };
+
         // --- Image Uploader ---
         const ImageUploader = ({ onUploadComplete, label = "画像アップロード", storage, appContextId }) => {
             const [uploading, setUploading] = React.useState(false);
@@ -3759,6 +3802,29 @@
                                                             }, 0);
                                                         } else if (editorRef.current) {
                                                             editorRef.current.insertLink(a);
+                                                        }
+                                                    }} />
+                                                    <TableInserter onInsert={(r, c) => {
+                                                        if (formData._editorMode === 'html' && htmlTextareaRef.current) {
+                                                            const ta = htmlTextareaRef.current;
+                                                            const start = ta.selectionStart;
+                                                            const end = ta.selectionEnd;
+                                                            const text = formData.contentHtml || '';
+                                                            let tableHtml = '<table style="width:100%; border-collapse:collapse; border:1px solid #ccc;"><tbody>';
+                                                            for (let i = 0; i < r; i++) {
+                                                                tableHtml += '<tr>';
+                                                                for (let j = 0; j < c; j++) tableHtml += '<td style="border:1px solid #ccc; padding:8px;">&nbsp;</td>';
+                                                                tableHtml += '</tr>';
+                                                            }
+                                                            tableHtml += '</tbody></table><p><br></p>';
+                                                            const newText = text.substring(0, start) + tableHtml + text.substring(end);
+                                                            setFormData(prev => ({ ...prev, contentHtml: newText }));
+                                                            setTimeout(() => {
+                                                                ta.focus();
+                                                                ta.setSelectionRange(start + tableHtml.length, start + tableHtml.length);
+                                                            }, 0);
+                                                        } else if (editorRef.current) {
+                                                            editorRef.current.insertTable(r, c);
                                                         }
                                                     }} />
                                                     <div className="text-xs text-gray-500">※文字色はエディタのカラー機能で変更できます</div>
