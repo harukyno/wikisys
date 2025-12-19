@@ -1252,6 +1252,30 @@
                 unmergeCells: () => {
                     const table = quillRef.current.getModule('table');
                     if (table) table.unmergeCells();
+                },
+                formatCell: (attr, value) => {
+                    const quill = quillRef.current;
+                    const range = quill.getSelection();
+                    if (!range) return;
+
+                    // セル内のすべての行に対して書式を適用
+                    // Quill 2.0 のテーブルモジュールでは、背景色は line 単位ではなく cell 単位の属性として扱う必要がある場合があるが
+                    // ここではDOMを直接操作してスタイルを設定し、Quillの変更を即座に反映させる
+                    const [line] = quill.getLine(range.index);
+                    let cell = line;
+                    while (cell && cell.statics.blotName !== 'table-cell') {
+                        cell = cell.parent;
+                    }
+
+                    if (cell && cell.domNode) {
+                        if (attr === 'background') {
+                            cell.domNode.style.backgroundColor = value;
+                        } else if (attr === 'align') {
+                            cell.domNode.style.textAlign = value;
+                        }
+                        // 変更を親コンポーネントに通知
+                        onChange(quill.root.innerHTML);
+                    }
                 }
             }));
 
@@ -1503,9 +1527,23 @@
                             <button onClick={() => onAction('deleteColumn')} className="px-2 py-1.5 bg-red-50 hover:bg-red-100 border border-red-100 text-red-600 rounded text-[10px] flex items-center gap-1 justify-center"><Icon name="minus" size={12} /> 列削除</button>
                         </div>
                         {isWysiwyg && (
-                            <div className="grid grid-cols-2 gap-1 mt-1">
-                                <button onClick={() => onAction('mergeCells')} className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded text-[10px]">セル結合</button>
-                                <button onClick={() => onAction('unmergeCells')} className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded text-[10px]">結合解除</button>
+                            <div className="space-y-1 mt-2 pt-2 border-t border-gray-100">
+                                <div className="text-[10px] font-bold text-gray-400 mb-1 ml-1 uppercase tracking-wider">セルの装飾</div>
+                                <div className="flex gap-1 flex-wrap">
+                                    {['#ffffff', '#fef2f2', '#f0f9ff', '#f0fdf4', '#fefce8', '#f5f3ff'].map(c => (
+                                        <button key={c} onClick={() => onAction('formatCell', { attr: 'background', value: c })}
+                                            className="w-5 h-5 rounded border border-gray-200" style={{ backgroundColor: c }} title={c} />
+                                    ))}
+                                </div>
+                                <div className="grid grid-cols-3 gap-1 mt-1">
+                                    <button onClick={() => onAction('formatCell', { attr: 'align', value: 'left' })} className="px-1 py-1 bg-gray-50 border rounded text-[10px]"><Icon name="align-left" size={12} /></button>
+                                    <button onClick={() => onAction('formatCell', { attr: 'align', value: 'center' })} className="px-1 py-1 bg-gray-50 border rounded text-[10px]"><Icon name="align-center" size={12} /></button>
+                                    <button onClick={() => onAction('formatCell', { attr: 'align', value: 'right' })} className="px-1 py-1 bg-gray-50 border rounded text-[10px]"><Icon name="align-right" size={12} /></button>
+                                </div>
+                                <div className="grid grid-cols-2 gap-1 mt-1">
+                                    <button onClick={() => onAction('mergeCells')} className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded text-[10px]">セル結合</button>
+                                    <button onClick={() => onAction('unmergeCells')} className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded text-[10px]">結合解除</button>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -3880,7 +3918,7 @@
                                                                 editorRef.current.insertTable(r, c);
                                                             }
                                                         }}
-                                                        onAction={(action) => {
+                                                        onAction={(action, payload) => {
                                                             if (formData._editorMode !== 'html' && editorRef.current) {
                                                                 if (action === 'insertRowBelow') editorRef.current.insertRow('below');
                                                                 else if (action === 'insertColumnRight') editorRef.current.insertColumn('right');
@@ -3888,8 +3926,9 @@
                                                                 else if (action === 'deleteColumn') editorRef.current.deleteColumn();
                                                                 else if (action === 'mergeCells') editorRef.current.mergeCells();
                                                                 else if (action === 'unmergeCells') editorRef.current.unmergeCells();
+                                                                else if (action === 'formatCell') editorRef.current.formatCell(payload.attr, payload.value);
                                                             } else {
-                                                                alert('行・列の操作はWYSIWYGモードで行ってください。');
+                                                                alert('表の操作はWYSIWYGモードで行ってください。');
                                                             }
                                                         }}
                                                     />
