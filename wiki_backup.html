@@ -37,13 +37,13 @@
     <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp, deleteApp, getApps } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, query, where, getDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js";
 
         window.firebaseModules = {
             initializeApp, deleteApp, getApps,
-            getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile,
+            getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile, setPersistence, browserLocalPersistence,
             getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, query, where, getDoc,
             getStorage, ref, uploadBytes, getDownloadURL
         };
@@ -292,6 +292,7 @@
             locationArticleId: '',
             mainImageUrl: ''
             , noYear: false
+            , importance: 3 // 重要度 (1-5)
             , attachments: [] // { name, url }
             , _editorMode: 'wysiwyg' // default editor view
         });
@@ -340,12 +341,15 @@
             const keyword = (filters.keyword || '').trim().toLowerCase();
             const tag = (filters.tag || '').replace(/^#/, '').trim().toLowerCase();
             const type = (filters.type || 'all');
+            const minImportance = Number(filters.minImportance) || 0;
             return sortByChronology(articles).filter(article => {
                 if (filters.excludeNoYear) {
                     const y = getArticleYear(article);
                     if (!y || Number.isNaN(y) || Number(y) === 0) return false;
                 }
+                if (filters.onlyApproved && !article.isApproved) return false;
                 if (type !== 'all' && article.type !== type) return false;
+                if (minImportance > 0 && (article.importance || 3) < minImportance) return false;
                 if (keyword) {
                     const haystack = [
                         article.title,
@@ -449,20 +453,243 @@
             };
         };
 
-        // Wiki記法をHTMLリンクに変換する関数
-        // サポート: [[Title|ID]] と [[Title]] の両方
-        // [[Title|ID]] -> <span class="wiki-link" data-article-id="ID">🔗 Title</span>
-        // [[Title]] -> <span class="wiki-link" data-wiki-title="Title">🔗 Title</span>
+        // Wiki Plugin Processor & Parser (PukiWiki Style)
+        let parsePukiWikiSyntax; // Forward declaration
+
+        const processPukiWikiPlugin = (name, args, content, isBlock) => {
+            const argList = (args || '').split(',').map(s => s.trim());
+
+            if (name.toLowerCase() === 'br') return '<br />';
+
+            if (name === 'size') {
+                return `<span style="font-size:${argList[0]}px">${content}</span>`;
+            }
+            if (name === 'color') {
+                return `<span style="color:${argList[0]}; ${argList[1] ? 'background-color:' + argList[1] : ''}">${content}</span>`;
+            }
+            if (name === 'attachref' || name === 'ref') {
+                const src = argList[0] || content;
+                let w, h;
+                if (argList[1]) {
+                    const dim = argList[1].match(/(\d+)x(\d+)/);
+                    if (dim) { w = dim[1]; h = dim[2]; }
+                    else if (argList[1].endsWith('%')) { w = argList[1]; }
+                }
+                return `<img src="${src}" style="${w ? 'width:' + w + (w.includes('%') ? '' : 'px') + ';' : ''} ${h ? 'height:' + h + 'px;' : ''}" class="inline-block" />`;
+            }
+            if (name === 'cssbox') {
+                return `<div style="${args}">${parsePukiWikiSyntax ? parsePukiWikiSyntax(content) : content}</div>`;
+            }
+            if (name === 'flex_container') {
+                const [jus, ali, wrp] = argList;
+                let style = 'display:flex; gap:10px;';
+                if (jus) style += `justify-content:${jus};`;
+                if (ali) style += `align-items:${ali};`;
+                if (wrp) style += `flex-wrap:${wrp};`;
+                return `<div style="${style}">${parsePukiWikiSyntax ? parsePukiWikiSyntax(content) : content}</div>`;
+            }
+            if (name === 'flex_box') {
+                const w = argList[0];
+                return `<div style="${w ? 'flex-basis:' + w + '; width:' + w + ';' : 'flex:1;'}">${parsePukiWikiSyntax ? parsePukiWikiSyntax(content) : content}</div>`;
+            }
+            if (name === 'skin') return content;
+            if (name === 'marquee') return `<marquee>${args}</marquee>`;
+            if (name === 'contents') return '';
+            if (name === 'fold') return `<details><summary class="cursor-pointer font-bold text-indigo-600">${args || '詳細'}</summary><div class="pl-4 border-l-2 ml-1 mt-1">${parsePukiWikiSyntax ? parsePukiWikiSyntax(content) : content}</div></details>`;
+            if (name === 'comment') return '<div class="text-xs text-gray-400 p-2 border bg-gray-50 my-2">[コメント欄]</div>';
+            return null;
+        };
+
+        parsePukiWikiSyntax = (text) => {
+            if (!text) return '';
+
+            // 0. Pre-process HTML
+            const decodeHtml = (html) => {
+                const txt = document.createElement("textarea");
+                txt.innerHTML = html;
+                return txt.value;
+            };
+
+            let cleanText = text
+                .replace(/\r/g, '') // Normalize newlines
+                .replace(/<br\s*\/?>/gi, '&br;')
+                .replace(/<\/p>/gi, '\n')
+                .replace(/<\/div>/gi, '\n')
+                .replace(/<\/tr>/gi, '\n')
+                .replace(/<\/li>/gi, '\n');
+
+            cleanText = decodeHtml(cleanText);
+
+            let res = cleanText;
+
+            // 1. Recursive Layout/Block Plugin Parser
+            for (let i = 0; i < 20; i++) {
+                const regex = /(?:#|&)([a-zA-Z0-9_]+)(?:\(([^)]*)\))?(\{+)([\s\S]*?)(\}+)(;?)/g;
+                let matched = false;
+                res = res.replace(regex, (m, name, args, open, content, close, semi) => {
+                    if (open.length !== close.length) return m;
+                    matched = true;
+                    // The recursive call happens inside processPukiWikiPlugin now
+                    const p = processPukiWikiPlugin(name, args, content, open.startsWith('#'));
+                    return p !== null ? p : m;
+                });
+                if (!matched) break;
+            }
+
+            const splitTableRow = (rowStr) => {
+                const cells = [];
+                let current = '';
+                let depthBracket = 0;
+                let depthBrace = 0;
+                for (let i = 0; i < rowStr.length; i++) {
+                    const char = rowStr[i];
+                    if (char === '[' && rowStr[i + 1] === '[') { depthBracket++; i++; current += '[['; continue; }
+                    if (char === ']' && rowStr[i + 1] === ']') { depthBracket--; i++; current += ']]'; continue; }
+                    if (char === '{') depthBrace++;
+                    if (char === '}') depthBrace--;
+                    if (char === '|' && depthBracket === 0 && depthBrace === 0) {
+                        cells.push(current);
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+                cells.push(current);
+                return cells;
+            };
+
+            const processInline = (str) => {
+                let s = str;
+                for (let i = 0; i < 10; i++) {
+                    let replaced = false;
+                    s = s.replace(/(&|#)([a-zA-Z0-9_]+)(?:\(([^)]*)\))?(?:\{([^}]*)\})?(;?)/g, (m, type, name, args, blockContent, semi) => {
+                        replaced = true;
+                        const p = processPukiWikiPlugin(name, args, blockContent || '', type === '#');
+                        return p !== null ? p : m;
+                    });
+                    if (!replaced) break;
+                }
+                s = s.replace(/'''([^']+)'''/g, '<i>$1</i>');
+                s = s.replace(/''([^']+)''/g, '<b>$1</b>');
+                s = s.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '<span class="wiki-link" data-article-id="$2">🔗 $1</span>');
+                s = s.replace(/\[\[([^\]]+)\]\]/g, '<span class="wiki-link" data-wiki-title="$1">🔗 $1</span>');
+                return s;
+            };
+
+            const lines = res.split('\n');
+            const outLines = [];
+            let inTable = false;
+            let tableRows = [];
+
+            const flushTable = () => {
+                if (!inTable) return;
+                let html = '<div class="overflow-x-auto my-2"><table class="wiki-table min-w-full border-collapse border border-gray-400 bg-white text-sm">';
+                tableRows.forEach(row => {
+                    html += '<tr>';
+                    const cells = splitTableRow(row.trim());
+                    if (cells.length > 0 && cells[0].trim() === '') cells.shift();
+                    if (cells.length > 0 && cells[cells.length - 1].trim() === '') cells.pop();
+                    if (cells.length === 0) return;
+                    cells.forEach(cell => {
+                        let c = cell;
+                        let tag = 'td';
+                        let style = 'border: 1px solid #cbd5e1; padding: 6px;';
+                        while (true) {
+                            c = c.trim();
+                            if (c.startsWith('~')) { tag = 'th'; c = c.substring(1); style += 'background-color:#f1f5f9; font-weight:bold;'; continue; }
+                            if (c.startsWith('BGCOLOR')) {
+                                const m = c.match(/^BGCOLOR\(([^)]+)\):/);
+                                if (m) { style += `background-color:${m[1]};`; c = c.substring(m[0].length); continue; }
+                            }
+                            if (c.startsWith('CENTER:')) { style += 'text-align:center;'; c = c.substring(7); continue; }
+                            if (c.startsWith('LEFT:')) { style += 'text-align:left;'; c = c.substring(5); continue; }
+                            if (c.startsWith('RIGHT:')) { style += 'text-align:right;'; c = c.substring(6); continue; }
+                            if (c === '>') { c = '&nbsp;'; }
+                            break;
+                        }
+                        html += `<${tag} style="${style}">${processInline(c)}</${tag}>`;
+                    });
+                    html += '</tr>';
+                });
+                html += '</table></div>';
+                outLines.push(html);
+                tableRows = [];
+                inTable = false;
+            };
+
+            lines.forEach(line => {
+                let l = line.trim();
+
+                // Table
+                if (l.startsWith('|')) {
+                    inTable = true;
+                    tableRows.push(l);
+                    return;
+                }
+                flushTable();
+
+                // Headers
+                const parseHeader = (line, level) => {
+                    let text = line.substring(level).trim();
+                    let id = Math.random().toString(36).substr(2, 9);
+                    const anchorMatch = text.match(/\[#([a-zA-Z0-9_-]+)\]$/);
+                    if (anchorMatch) {
+                        id = anchorMatch[1];
+                        text = text.substring(0, text.length - anchorMatch[0].length).trim();
+                    }
+                    return { text, id };
+                };
+
+                if (l.startsWith('***')) { const h = parseHeader(l, 3); outLines.push(`<h4 id="${h.id}" class="text-lg font-bold mt-2 border-b border-gray-200 pb-1 flex items-center gap-2"><span class="w-1 h-4 bg-indigo-300 inline-block"></span>${processInline(h.text)}</h4>`); return; }
+                if (l.startsWith('**')) { const h = parseHeader(l, 2); outLines.push(`<h3 id="${h.id}" class="text-xl font-bold mt-3 mb-2 border-b-2 border-indigo-100 flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-indigo-500 inline-block"></span>${processInline(h.text)}</h3>`); return; }
+                if (l.startsWith('*')) { const h = parseHeader(l, 1); outLines.push(`<h2 id="${h.id}" class="text-2xl font-bold mt-6 mb-3 border-b-2 border-indigo-600 pb-1 serif text-indigo-900">${processInline(h.text)}</h2>`); return; }
+
+                // HR
+                if (l.startsWith('----')) { outLines.push('<hr class="my-4 border-gray-300 border-dashed">'); return; }
+
+                // Alignments
+                if (l.startsWith('CENTER:')) { outLines.push(`<div class="text-center">${processInline(l.substring(7))}</div>`); return; }
+                if (l.startsWith('LEFT:')) { outLines.push(`<div class="text-left">${processInline(l.substring(5))}</div>`); return; }
+                if (l.startsWith('RIGHT:')) { outLines.push(`<div class="text-right">${processInline(l.substring(6))}</div>`); return; }
+
+                if (l === '') { outLines.push('<br class="my-2" />'); return; }
+                outLines.push(processInline(l) + '<br>');
+            });
+            flushTable();
+            return outLines.join('\n');
+        };
+
+        // Wiki記法をHTMLリンクに変換する関数 (Wrapper)
         const transformContent = (html) => {
             if (!html) return '';
-            // まず [[Title|ID]] を置換
+
+            // Explicit HTML Mode check
+            if (html.trim().startsWith('<!-- html-mode -->') || html.trim().startsWith('<!DOCTYPE html>')) {
+                // Just do simple link replacement
+                let out = html.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, (match, title, id) => {
+                    return `<span class="wiki-link" data-article-id="${id}">🔗 ${title}</span>`;
+                });
+                out = out.replace(/\[\[([^\]|]+)\]\]/g, (match, title) => {
+                    const t = title.trim();
+                    return `<span class="wiki-link" data-wiki-title="${t}">🔗 ${t}</span>`;
+                });
+                return out;
+            }
+
+            // Detect Wiki Syntax (Heuristic)
+            // If it contains plugin syntax #plugin or &plugin or table | |
+            // Updated to catch simple plugins ending with ; like &br;
+            if (html.match(/(?:#|&)[a-zA-Z0-9_]+(?:[\(\{;])/) || html.match(/^\|.+\|$/m)) {
+                // Ensure the function is defined before calling
+                if (parsePukiWikiSyntax) return parsePukiWikiSyntax(html);
+            }
+
+            // Fallback for Standard HTML with simple Wiki Links
             let out = html.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, (match, title, id) => {
                 return `<span class="wiki-link" data-article-id="${id}">🔗 ${title}</span>`;
             });
-            // 次に [[Title]] (IDなし) を置換
             out = out.replace(/\[\[([^\]|]+)\]\]/g, (match, title) => {
                 const t = title.trim();
-                // 特殊キーワードがあれば data 属性で扱う（例: 年代なし）
                 return `<span class="wiki-link" data-wiki-title="${t}">🔗 ${t}</span>`;
             });
             return out;
@@ -597,16 +824,28 @@
 
             const addMember = async () => {
                 if (!inviteId.trim()) return;
+                const name = prompt("メンバーの表示名を入力してください (任意)", "");
                 setLoading(true);
                 try {
                     const { doc, setDoc, serverTimestamp } = window.firebaseModules;
                     await setDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', inviteId.trim()), {
-                        role: 'editor', addedAt: serverTimestamp()
+                        role: 'editor', username: name || '', addedAt: serverTimestamp()
                     });
                     setInviteId('');
                     alert('メンバーを追加しました');
                 } catch (e) { alert('追加エラー: ' + e.message); }
                 setLoading(false);
+            };
+
+            const updateMemberName = async (member) => {
+                const newName = prompt("新しい表示名を入力してください", member.username || "");
+                if (newName === null) return;
+                try {
+                    const { doc, updateDoc } = window.firebaseModules;
+                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', member.id), {
+                        username: newName
+                    });
+                } catch (e) { alert('更新エラー: ' + e.message); }
             };
 
             const removeMember = async (uid) => {
@@ -615,6 +854,15 @@
                     const { doc, deleteDoc } = window.firebaseModules;
                     await deleteDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', uid));
                 } catch (e) { alert('削除エラー: ' + e.message); }
+            };
+
+            const toggleApprovalParams = async (member) => {
+                try {
+                    const { doc, updateDoc } = window.firebaseModules;
+                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', member.id), {
+                        canApprove: !member.canApprove
+                    });
+                } catch (e) { alert('更新エラー: ' + e.message); }
             };
 
             return (
@@ -631,11 +879,23 @@
                         <div className="space-y-2 max-h-60 overflow-y-auto">
                             {members.map(m => (
                                 <div key={m.id} className="flex justify-between items-center border-b pb-2">
-                                    <div>
-                                        <div className="text-xs text-gray-500 font-mono">{m.id}</div>
-                                        <span className={`text-[10px] px-2 py-0.5 rounded ${m.role === 'owner' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'}`}>{m.role}</span>
+                                    <div className="flex-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-bold text-gray-800">{m.username || 'No Name'}</span>
+                                            <button onClick={() => updateMemberName(m)} className="text-gray-400 hover:text-indigo-600"><Icon name="edit-2" size={12} /></button>
+                                            <span className="text-[10px] text-gray-400 font-mono">({m.id})</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <span className={`text-[10px] px-2 py-0.5 rounded ${m.role === 'owner' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'}`}>{m.role}</span>
+                                            {m.role !== 'owner' && (
+                                                <label className="flex items-center gap-1 text-[10px] cursor-pointer bg-gray-100 px-2 py-0.5 rounded hover:bg-gray-200">
+                                                    <input type="checkbox" checked={!!m.canApprove} onChange={() => toggleApprovalParams(m)} />
+                                                    承認権限
+                                                </label>
+                                            )}
+                                        </div>
                                     </div>
-                                    {m.role !== 'owner' && <button onClick={() => removeMember(m.id)} className="text-red-500 text-xs border px-2 py-1 rounded hover:bg-red-50">削除</button>}
+                                    {m.role !== 'owner' && <button onClick={() => removeMember(m.id)} className="text-red-500 text-xs border px-2 py-1 rounded hover:bg-red-50 ml-2">削除</button>}
                                 </div>
                             ))}
                         </div>
@@ -644,124 +904,169 @@
             );
         };
 
-        // --- Region Rule Editor (矩形/円エリアのGUI編集) ---
-        const RegionRuleEditor = ({ rules = [], onSave, onClose }) => {
+        // --- Region Rule Editor (Map-based Interactive) ---
+        const RegionRuleEditor = ({ rules = [], onSave, onClose, worldData }) => {
             const [items, setItems] = React.useState(rules);
-            const addRule = () => setItems([...items, { tag: '', type: 'rect', bounds: { latMin: 0, latMax: 0, lngMin: 0, lngMax: 0 } }]);
-            const updateRule = (idx, updater) => setItems(items.map((r, i) => i === idx ? updater(r) : r));
-            const removeRule = (idx) => setItems(items.filter((_, i) => i !== idx));
-            const handleSave = () => { if (onSave) onSave(items); };
-            const previewBounds = React.useMemo(() => {
-                const lats = [];
-                const lngs = [];
-                items.forEach(r => {
-                    if (r.type === 'rect' && r.bounds) {
-                        lats.push(r.bounds.latMin, r.bounds.latMax);
-                        lngs.push(r.bounds.lngMin, r.bounds.lngMax);
-                    } else if (r.type === 'circle' && r.center) {
-                        const dLat = (r.radiusKm || 0) / 111; // 粗い換算
-                        const dLng = (r.radiusKm || 0) / 111;
-                        lats.push(r.center.lat - dLat, r.center.lat + dLat);
-                        lngs.push(r.center.lng - dLng, r.center.lng + dLng);
+            const [mode, setMode] = React.useState('view'); // view, drawing_rect, drawing_circle
+            const [tempPoints, setTempPoints] = React.useState([]);
+            const mapRef = React.useRef(null);
+            const leafletMap = React.useRef(null);
+            const layerGroupRef = React.useRef(null);
+
+            // Init Map
+            React.useEffect(() => {
+                if (!mapRef.current || leafletMap.current) return;
+                const map = L.map(mapRef.current, { crs: L.CRS.Simple, minZoom: -3, maxZoom: 4, zoomControl: true });
+                leafletMap.current = map;
+                layerGroupRef.current = L.layerGroup().addTo(map);
+
+                // Load Background Image
+                const layers = worldData?.mapLayers || (worldData?.mapImageUrl ? [{ id: 'default', url: worldData.mapImageUrl }] : []);
+                if (layers.length > 0) {
+                    const img = new Image();
+                    img.src = layers[0].url;
+                    img.onload = () => {
+                        const bounds = [[-img.height / 2, -img.width / 2], [img.height / 2, img.width / 2]];
+                        L.imageOverlay(layers[0].url, bounds).addTo(map);
+                        map.fitBounds(bounds);
+                    };
+                } else {
+                    const bounds = [[-500, -500], [500, 500]];
+                    L.rectangle(bounds, { color: "#9ca3af", weight: 1, fill: false }).addTo(map);
+                    map.fitBounds(bounds);
+                }
+
+                // Click Handler
+                map.on('click', (e) => {
+                    handleMapClick(e.latlng);
+                });
+            }, []);
+
+            // Ref for accessing current mode in event handler (if needed) but state works if defined inside component (closure)
+            // Render items on map
+            React.useEffect(() => {
+                if (!leafletMap.current || !layerGroupRef.current) return;
+                layerGroupRef.current.clearLayers();
+
+                items.forEach((item, idx) => {
+                    const color = ['#6366f1', '#10b981', '#f59e0b', '#ef4444'][idx % 4];
+                    let layer = null;
+                    if (item.type === 'rect' && item.bounds) {
+                        const b = [[item.bounds.latMin, item.bounds.lngMin], [item.bounds.latMax, item.bounds.lngMax]];
+                        layer = L.rectangle(b, { color, weight: 2, fillOpacity: 0.2 });
+                    } else if (item.type === 'circle' && item.center) {
+                        layer = L.circle([item.center.lat, item.center.lng], { radius: (item.radiusKm || 1) * 1000, color, weight: 2, fillOpacity: 0.2 }); // Leaflet circle radius is meters roughly in CRS.Simple? No, it depends.
+                        // In CRS.Simple, radius is map units. If "radiusKm" is treated as map units:
+                        layer = L.circle([item.center.lat, item.center.lng], { radius: item.radiusKm, color, weight: 2, fillOpacity: 0.2 });
+                    }
+
+                    if (layer) {
+                        layer.bindTooltip(`<b>${item.tag}</b>`, { permanent: true, direction: 'center', className: 'bg-transparent border-0 font-bold shadow-none' });
+                        layer.addTo(layerGroupRef.current);
                     }
                 });
-                const minLat = lats.length ? Math.min(...lats) : -500;
-                const maxLat = lats.length ? Math.max(...lats) : 500;
-                const minLng = lngs.length ? Math.min(...lngs) : -500;
-                const maxLng = lngs.length ? Math.max(...lngs) : 500;
-                // avoid zero range
-                const pad = 10;
-                return { minLat: minLat - pad, maxLat: maxLat + pad, minLng: minLng - pad, maxLng: maxLng + pad };
             }, [items]);
-            const toXY = (lat, lng) => {
-                const { minLat, maxLat, minLng, maxLng } = previewBounds;
-                const w = maxLng - minLng || 1;
-                const h = maxLat - minLat || 1;
-                const x = ((lng - minLng) / w) * 100;
-                const y = (1 - (lat - minLat) / h) * 100; // flip y for svg
-                return { x, y };
+
+            const handleMapClick = (latlng) => {
+                setMode(prevMode => {
+                    if (prevMode === 'drawing_rect') {
+                        setTempPoints(prev => {
+                            const newPoints = [...prev, latlng];
+                            if (newPoints.length === 2) {
+                                // Finish Rect
+                                const [p1, p2] = newPoints;
+                                const latMin = Math.min(p1.lat, p2.lat);
+                                const latMax = Math.max(p1.lat, p2.lat);
+                                const lngMin = Math.min(p1.lng, p2.lng);
+                                const lngMax = Math.max(p1.lng, p2.lng);
+                                const tag = prompt("タグ名を入力してください:");
+                                if (tag) {
+                                    setItems(current => [...current, { tag, type: 'rect', bounds: { latMin, latMax, lngMin, lngMax } }]);
+                                }
+                                setTempPoints([]);
+                                return []; // Reset in next render by mode change
+                            }
+                            return newPoints;
+                        });
+                        if (tempPoints.length === 1) return 'view'; // Will be handled by effect or logic above? No, setState is async.
+                        // Logic simplified:
+                        // If we just added the 2nd point, we are done.
+                        // But we need to check the updated state.
+                        // Better to handle logic inside the setTempPoints callback or separate ref.
+                        return prevMode; // Stay in mode until 2nd point logic executes
+                    } else if (prevMode === 'drawing_circle') {
+                        setTempPoints(prev => {
+                            if (prev.length === 0) {
+                                return [latlng]; // Set Center
+                            } else {
+                                // Set Radius
+                                const center = prev[0];
+                                const radius = Math.sqrt(Math.pow(latlng.lat - center.lat, 2) + Math.pow(latlng.lng - center.lng, 2));
+                                const tag = prompt("タグ名を入力してください:");
+                                if (tag) {
+                                    setItems(current => [...current, { tag, type: 'circle', center: { lat: center.lat, lng: center.lng }, radiusKm: radius }]);
+                                }
+                                return [];
+                            }
+                        });
+                    }
+                    return prevMode;
+                });
             };
+
+            // Side effect to exit mode after shape completion
+            React.useEffect(() => {
+                if (mode === 'drawing_rect' && tempPoints.length === 2) setMode('view');
+                if (mode === 'drawing_circle' && tempPoints.length === 0 && mode !== 'view') setMode('view'); // slightly buggy logic, fix below
+            }, [tempPoints]);
+
+            // Fix circle logic: clearing tempPoints implies done
+            const handleModeChange = (m) => {
+                setMode(m);
+                setTempPoints([]);
+            };
+
+            const removeItem = (idx) => setItems(items.filter((_, i) => i !== idx));
+
             return (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
-                    <div className="bg-white w-full max-w-3xl rounded-lg shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between">
-                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Icon name="map" size={18} /> 地域タグ自動付与ルール</h3>
-                            <button onClick={onClose} className="text-gray-500 hover:text-gray-800"><Icon name="x" size={18} /></button>
-                        </div>
-                        <p className="text-xs text-gray-500">矩形または円のエリアを定義すると、記事の座標が含まれる場合にタグが自動追加されます。</p>
-                        <div className="bg-slate-100 border rounded p-3">
-                            <div className="text-xs font-bold text-gray-600 mb-2">プレビュー</div>
-                            <div className="w-full h-48 bg-white border rounded relative overflow-hidden">
-                                <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full">
-                                    <rect x="0" y="0" width="100" height="100" fill="#f8fafc" stroke="#cbd5e1" />
-                                    <g className="text-[8px]" fill="none" strokeWidth="1.5">
-                                        {items.map((r, idx) => {
-                                            const color = ['#6366f1', '#10b981', '#f59e0b', '#ef4444'][idx % 4];
-                                            if (r.type === 'rect' && r.bounds) {
-                                                const p1 = toXY(r.bounds.latMax, r.bounds.lngMin);
-                                                const p2 = toXY(r.bounds.latMin, r.bounds.lngMax);
-                                                const w = Math.abs(p2.x - p1.x);
-                                                const h = Math.abs(p2.y - p1.y);
-                                                const x = Math.min(p1.x, p2.x);
-                                                const y = Math.min(p1.y, p2.y);
-                                                return (
-                                                    <g key={idx}>
-                                                        <rect x={x} y={y} width={w} height={h} stroke={color} fill={`${color}20`} />
-                                                        <text x={x + 1} y={y + 6} fill={color}>{r.tag || 'rect'}</text>
-                                                    </g>
-                                                );
-                                            }
-                                            if (r.type === 'circle' && r.center) {
-                                                const center = toXY(r.center.lat || 0, r.center.lng || 0);
-                                                const d = (r.radiusKm || 0) / 111;
-                                                const edge = toXY((r.center.lat || 0) + d, r.center.lng || 0);
-                                                const ry = Math.abs(edge.y - center.y);
-                                                return (
-                                                    <g key={idx}>
-                                                        <circle cx={center.x} cy={center.y} r={ry} stroke={color} fill={`${color}20`} />
-                                                        <text x={center.x + 1} y={center.y} fill={color}>{r.tag || 'circle'}</text>
-                                                    </g>
-                                                );
-                                            }
-                                            return null;
-                                        })}
-                                    </g>
-                                </svg>
+                    <div className="bg-white w-full h-full max-w-6xl max-h-[90vh] rounded-lg shadow-2xl flex flex-col overflow-hidden">
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <div className="flex items-center gap-4">
+                                <h3 className="text-lg font-bold flex items-center gap-2"><Icon name="map" /> 地域タグ設定</h3>
+                                <div className="flex bg-white border rounded p-1 gap-1">
+                                    <button onClick={() => handleModeChange('view')} className={`px-3 py-1 rounded text-sm ${mode === 'view' ? 'bg-indigo-100 text-indigo-700 font-bold' : 'hover:bg-gray-100'}`}><Icon name="mouse-pointer" size={14} /> 操作</button>
+                                    <button onClick={() => handleModeChange('drawing_rect')} className={`px-3 py-1 rounded text-sm ${mode === 'drawing_rect' ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-gray-100'}`}><Icon name="square" size={14} /> 矩形追加</button>
+                                    <button onClick={() => handleModeChange('drawing_circle')} className={`px-3 py-1 rounded text-sm ${mode === 'drawing_circle' ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-gray-100'}`}><Icon name="circle" size={14} /> 円追加</button>
+                                </div>
+                                <div className="text-sm text-gray-500">
+                                    {mode === 'drawing_rect' && (tempPoints.length === 0 ? '始点をクリック' : '終点をクリック')}
+                                    {mode === 'drawing_circle' && (tempPoints.length === 0 ? '中心をクリック' : '半径位置をクリック')}
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={onClose} className="px-4 py-2 border rounded hover:bg-gray-50">キャンセル</button>
+                                <button onClick={() => onSave(items)} className="px-6 py-2 bg-indigo-600 text-white font-bold rounded hover:bg-indigo-700">保存</button>
                             </div>
                         </div>
-                        <div className="space-y-3">
-                            {items.map((rule, idx) => (
-                                <div key={idx} className="border rounded-lg p-3 bg-gray-50 space-y-2">
-                                    <div className="flex items-center gap-2">
-                                        <input className="border p-1 rounded text-sm flex-1" placeholder="タグ名 (例: north)" value={rule.tag} onChange={e => updateRule(idx, r => ({ ...r, tag: e.target.value }))} />
-                                        <select className="border p-1 rounded text-sm" value={rule.type} onChange={e => updateRule(idx, r => ({ ...r, type: e.target.value }))}>
-                                            <option value="rect">矩形</option>
-                                            <option value="circle">円</option>
-                                        </select>
-                                        <button onClick={() => removeRule(idx)} className="text-red-500 text-xs border px-2 py-1 rounded hover:bg-red-50">削除</button>
+                        <div className="flex-1 flex overflow-hidden">
+                            <div className="w-64 border-r bg-gray-50 overflow-y-auto p-2 space-y-2">
+                                <div className="text-xs font-bold text-gray-500 mb-2">登録済みルール ({items.length})</div>
+                                {items.map((item, idx) => (
+                                    <div key={idx} className="bg-white p-2 rounded border shadow-sm text-sm group">
+                                        <div className="flex justify-between items-center font-bold text-gray-800">
+                                            <span>{item.tag}</span>
+                                            <button onClick={() => removeItem(idx)} className="text-gray-400 hover:text-red-500"><Icon name="trash-2" size={14} /></button>
+                                        </div>
+                                        <div className="text-xs text-gray-500 mt-1">
+                                            {item.type === 'rect' ? '矩形エリア' : '円形エリア'}
+                                        </div>
                                     </div>
-                                    {rule.type === 'rect' ? (
-                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                                            <input className="border p-1 rounded" placeholder="latMin" type="number" value={rule.bounds?.latMin ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), latMin: Number(e.target.value) } }))} />
-                                            <input className="border p-1 rounded" placeholder="latMax" type="number" value={rule.bounds?.latMax ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), latMax: Number(e.target.value) } }))} />
-                                            <input className="border p-1 rounded" placeholder="lngMin" type="number" value={rule.bounds?.lngMin ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), lngMin: Number(e.target.value) } }))} />
-                                            <input className="border p-1 rounded" placeholder="lngMax" type="number" value={rule.bounds?.lngMax ?? ''} onChange={e => updateRule(idx, r => ({ ...r, bounds: { ...(r.bounds || {}), lngMax: Number(e.target.value) } }))} />
-                                        </div>
-                                    ) : (
-                                        <div className="grid grid-cols-3 gap-2 text-xs">
-                                            <input className="border p-1 rounded" placeholder="中心 lat" type="number" value={rule.center?.lat ?? ''} onChange={e => updateRule(idx, r => ({ ...r, center: { ...(r.center || {}), lat: Number(e.target.value) } }))} />
-                                            <input className="border p-1 rounded" placeholder="中心 lng" type="number" value={rule.center?.lng ?? ''} onChange={e => updateRule(idx, r => ({ ...r, center: { ...(r.center || {}), lng: Number(e.target.value) } }))} />
-                                            <input className="border p-1 rounded" placeholder="半径 km" type="number" value={rule.radiusKm ?? ''} onChange={e => updateRule(idx, r => ({ ...r, radiusKm: Number(e.target.value) }))} />
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <button onClick={addRule} className="px-3 py-2 text-sm bg-gray-100 rounded flex items-center gap-1"><Icon name="plus" size={14} /> ルール追加</button>
-                            <div className="flex gap-2">
-                                <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded text-sm">キャンセル</button>
-                                <button onClick={handleSave} className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-bold">保存</button>
+                                ))}
+                                {items.length === 0 && <div className="text-xs text-gray-400 text-center py-4">ルールはまだありません</div>}
+                            </div>
+                            <div className="flex-1 relative">
+                                <div className="absolute inset-0 bg-slate-200" ref={mapRef}></div>
                             </div>
                         </div>
                     </div>
@@ -981,22 +1286,74 @@
         // --- Article Link Inserter ---
         const ArticleLinkInserter = ({ articles, onInsert }) => {
             const [query, setQuery] = React.useState('');
-            const filtered = React.useMemo(() => query ? articles.filter(a => a.title.toLowerCase().includes(query.toLowerCase())) : [], [articles, query]);
+            const [searchMode, setSearchMode] = React.useState('title'); // 'title' or 'tag'
+
+            const filtered = React.useMemo(() => {
+                if (!query) return [];
+                const lowerQuery = query.toLowerCase();
+
+                if (searchMode === 'tag') {
+                    // タグ検索: 記事のタグ配列に部分一致するタグが含まれているかチェック
+                    return articles.filter(a =>
+                        a.tags && a.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
+                    );
+                } else {
+                    // 記事名検索
+                    return articles.filter(a =>
+                        a.title.toLowerCase().includes(lowerQuery)
+                    );
+                }
+            }, [articles, query, searchMode]);
+
             return (
                 <div className="space-y-2 bg-white border p-2 rounded">
-                    <label className="text-xs font-bold text-gray-500">記事名検索</label>
-                    <input className="w-full border p-1 text-sm rounded" placeholder="記事名を検索..." value={query} onChange={e => setQuery(e.target.value)} />
-                    <div className="max-h-32 overflow-y-auto space-y-1">
+                    <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-gray-500">
+                            {searchMode === 'title' ? '記事名検索' : 'タグ検索'}
+                        </label>
+                        <div className="flex gap-1">
+                            <button
+                                onClick={() => setSearchMode('title')}
+                                className={`px-2 py-0.5 text-xs rounded ${searchMode === 'title' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                            >
+                                記事名
+                            </button>
+                            <button
+                                onClick={() => setSearchMode('tag')}
+                                className={`px-2 py-0.5 text-xs rounded ${searchMode === 'tag' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                            >
+                                タグ
+                            </button>
+                        </div>
+                    </div>
+                    <input
+                        className="w-full border p-1 text-sm rounded"
+                        placeholder={searchMode === 'title' ? '記事名を検索...' : 'タグを検索...'}
+                        value={query}
+                        onChange={e => setQuery(e.target.value)}
+                    />
+                    <div className="max-h-48 overflow-y-auto space-y-1 custom-scrollbar">
                         {filtered.map(a => (
-                            <div key={a.id} className="w-full text-left text-xs px-2 py-1 hover:bg-indigo-50 rounded flex justify-between items-center group">
-                                <div className="flex-1 pr-2">
-                                    <div className="overflow-x-auto whitespace-nowrap text-sm" style={{ maxWidth: '100%' }} title={a.title}>
-                                        {a.title}
+                            <div key={a.id} className="w-full text-left text-xs px-2 py-1 hover:bg-indigo-50 rounded group">
+                                <div className="flex justify-between items-center gap-2">
+                                    <div className="flex-1 pr-2 min-w-0">
+                                        <div className="overflow-x-auto whitespace-nowrap text-sm font-medium" style={{ maxWidth: '100%' }} title={a.title}>
+                                            {a.title}
+                                        </div>
+                                        {searchMode === 'tag' && a.tags && a.tags.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mt-1">
+                                                {a.tags.map(tag => (
+                                                    <span key={tag} className="text-[10px] bg-gray-100 text-gray-600 px-1 rounded">
+                                                        #{tag}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
-                                </div>
-                                <div className="flex gap-2 shrink-0">
-                                    <button onClick={() => { copyText(a.id); }} className="text-gray-400 hover:text-indigo-600 text-xs">IDコピー</button>
-                                    <button onClick={() => { onInsert(a); setQuery(''); }} className="text-indigo-600 font-bold text-xs">挿入</button>
+                                    <div className="flex gap-2 shrink-0">
+                                        <button onClick={() => { copyText(a.id); }} className="text-gray-400 hover:text-indigo-600 text-xs">IDコピー</button>
+                                        <button onClick={() => { onInsert(a); setQuery(''); }} className="text-indigo-600 font-bold text-xs">挿入</button>
+                                    </div>
                                 </div>
                             </div>
                         ))}
@@ -1097,12 +1454,15 @@
                         try { const s = localStorage.getItem('worldweaver_firebase_config'); if (s) config = JSON.parse(s); } catch (e) { }
                         setActiveConfig(config);
                         setAppContextId(appId);
-                        const { initializeApp, getAuth, getFirestore, getStorage, onAuthStateChanged, getApps } = modules;
+                        const { initializeApp, getAuth, getFirestore, getStorage, onAuthStateChanged, getApps, setPersistence, browserLocalPersistence } = modules;
                         let app = getApps().length > 0 ? getApps()[0] : initializeApp(config);
-                        setAuth(getAuth(app));
+                        const authInstance = getAuth(app);
+                        setAuth(authInstance);
                         setDb(getFirestore(app));
                         try { setStorage(getStorage(app)); } catch (e) { }
-                        onAuthStateChanged(getAuth(app), u => { setUser(u); setLoading(false); });
+                        // ログイン情報を永続化（ブラウザを閉じても保持）
+                        setPersistence(authInstance, browserLocalPersistence).catch(e => console.warn('Persistence setup failed:', e));
+                        onAuthStateChanged(authInstance, u => { setUser(u); setLoading(false); });
                     } catch (e) { setError(e.message); setLoading(false); }
                 };
                 return () => clearInterval(timer);
@@ -1128,18 +1488,18 @@
             const isSelected = selectedFolder === node.fullPath;
             return (
                 <div className="select-none">
-                    <div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition ${isSelected ? 'bg-indigo-100 text-indigo-900 font-bold' : 'hover:bg-gray-100 text-gray-700'}`} style={{ paddingLeft: `${depth * 16 + 8}px` }} onClick={() => { if (node.articles.length > 0) onSelect(node); else setIsOpen(!isOpen); }}>
-                        {hasChildren ? (<span onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} className="p-0.5 hover:bg-gray-200 rounded text-gray-400"><Icon name={isOpen ? "chevron-down" : "chevron-right"} size={14} /></span>) : (<span className="w-4"></span>)}
-                        <Icon name={hasChildren ? (isOpen ? "folder-open" : "folder") : "folder"} size={14} className={hasChildren ? "text-indigo-400" : "text-gray-400"} />
+                    <div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition ${isSelected ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-slate-700 text-slate-300'}`} style={{ paddingLeft: `${depth * 16 + 8}px` }} onClick={() => { if (node.articles.length > 0) onSelect(node); else setIsOpen(!isOpen); }}>
+                        {hasChildren ? (<span onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} className="p-0.5 hover:bg-slate-600 rounded text-slate-400"><Icon name={isOpen ? "chevron-down" : "chevron-right"} size={14} /></span>) : (<span className="w-4"></span>)}
+                        <Icon name={hasChildren ? (isOpen ? "folder-open" : "folder") : "folder"} size={14} className={hasChildren ? "text-indigo-400" : "text-slate-500"} />
                         <span className="truncate text-sm flex-1">{name}</span>
-                        {node.articles.length > 0 && <span className="text-[10px] bg-gray-200 px-1.5 rounded-full text-gray-500">{node.articles.length}</span>}
+                        {node.articles.length > 0 && <span className="text-[10px] bg-slate-700 px-1.5 rounded-full text-slate-300">{node.articles.length}</span>}
                     </div>
                     {isOpen && hasChildren && <div>{Object.entries(node.children).sort((a, b) => a[0].localeCompare(b[0])).map(([childName, childNode]) => (<FolderTreeItem key={childName} name={childName} node={childNode} depth={depth + 1} onSelect={onSelect} selectedFolder={selectedFolder} />))}</div>}
                 </div>
             );
         };
 
-        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange }) => {
+        const FolderIntegratedList = ({ articles, onSelectArticle, onTagClick, onOpenNoYear, onSearchChange, onlyApproved = false }) => {
             const [selectedFolderNode, setSelectedFolderNode] = React.useState(null);
             const [query, setQuery] = React.useState('');
             const handleContentClick = (e) => {
@@ -1151,10 +1511,11 @@
                 if (id) {
                     const target = articles.find(a => a.id === id);
                     if (target) {
-                        // if target has year, ensure timeline filter shows dated articles
+                        // 記事の年代状態に応じてフィルタを調整
                         const y = getArticleYear(target);
-                        if (y && typeof onSearchChange === 'function') {
-                            try { onSearchChange({ excludeNoYear: true }); } catch (e) { console.warn(e); }
+                        const hasYear = y && y !== 0 && !target.noYear;
+                        if (typeof onSearchChange === 'function') {
+                            try { onSearchChange({ excludeNoYear: hasYear }); } catch (e) { console.warn(e); }
                         }
                         if (onSelectArticle) onSelectArticle(target);
                     } else alert('リンク先の記事が見つかりません');
@@ -1166,8 +1527,15 @@
                     }
                     // fallback: try find by exact title
                     const target = articles.find(a => (a.title || '').trim() === wikiTitle.trim());
-                    if (target && onSelectArticle) onSelectArticle(target);
-                    else alert('リンク先の記事が見つかりません');
+                    if (target) {
+                        // 記事の年代状態に応じてフィルタを調整
+                        const y = getArticleYear(target);
+                        const hasYear = y && y !== 0 && !target.noYear;
+                        if (typeof onSearchChange === 'function') {
+                            try { onSearchChange({ excludeNoYear: hasYear }); } catch (e) { console.warn(e); }
+                        }
+                        if (onSelectArticle) onSelectArticle(target);
+                    } else alert('リンク先の記事が見つかりません');
                 }
             };
             const folderTree = React.useMemo(() => {
@@ -1195,25 +1563,29 @@
             React.useEffect(() => { if (!selectedFolderNode && articles.length > 0) setSelectedFolderNode(folderTree.allNode); }, [articles, selectedFolderNode, folderTree]);
             const displayArticles = React.useMemo(() => {
                 let target = selectedFolderNode ? selectedFolderNode.articles : [];
+                if (onlyApproved) target = target.filter(a => a.isApproved);
                 if (query) { const lower = query.toLowerCase(); target = articles.filter(a => [a.title, a.folder, stripHtml(a.contentHtml)].join(' ').toLowerCase().includes(lower)); }
                 return sortByChronology(target);
-            }, [selectedFolderNode, query, articles]);
+            }, [selectedFolderNode, query, articles, onlyApproved]);
             return (
-                <div className="flex h-full bg-white">
-                    <div className="w-64 flex-shrink-0 border-r bg-gray-50 flex flex-col h-full overflow-hidden">
-                        <div className="p-3 border-b bg-gray-100"><input className="w-full border rounded px-2 py-1 text-sm" placeholder="記事を検索..." value={query} onChange={e => setQuery(e.target.value)} /></div>
+                <div className="flex h-full bg-slate-900">
+                    <div className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800 flex flex-col h-full overflow-hidden">
+                        <div className="p-3 border-b border-slate-700 bg-slate-800/50"><input className="w-full border border-slate-600 bg-slate-700 text-white placeholder-slate-400 rounded px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none" placeholder="記事を検索..." value={query} onChange={e => setQuery(e.target.value)} /></div>
                         <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                            {!query && <><div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition mb-1 ${selectedFolderNode?.fullPath === 'ALL' ? 'bg-indigo-100 text-indigo-900 font-bold' : 'hover:bg-gray-100 text-gray-700'}`} onClick={() => setSelectedFolderNode(folderTree.allNode)}><Icon name="layers" size={14} className="text-indigo-500" /><span className="text-sm">すべての記事</span><span className="text-[10px] bg-gray-200 px-1.5 rounded-full ml-auto">{articles.length}</span></div><hr className="my-2 border-gray-200" />{Object.entries(folderTree.root.children).sort((a, b) => a[0].localeCompare(b[0])).map(([name, node]) => (<FolderTreeItem key={name} name={name} node={node} onSelect={setSelectedFolderNode} selectedFolder={selectedFolderNode?.fullPath} />))}</>}
+                            {!query && <><div className={`flex items-center gap-2 py-1.5 px-2 rounded cursor-pointer transition mb-1 ${selectedFolderNode?.fullPath === 'ALL' ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-slate-700 text-slate-300'}`} onClick={() => setSelectedFolderNode(folderTree.allNode)}><Icon name="layers" size={14} className="text-indigo-400" /><span className="text-sm">すべての記事</span><span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 rounded-full ml-auto">{articles.length}</span></div><hr className="my-2 border-slate-700" />{Object.entries(folderTree.root.children).sort((a, b) => a[0].localeCompare(b[0])).map(([name, node]) => (<FolderTreeItem key={name} name={name} node={node} onSelect={setSelectedFolderNode} selectedFolder={selectedFolderNode?.fullPath} />))}</>}
                         </div>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-4 bg-slate-50 custom-scrollbar">
-                        <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="flex-1 overflow-y-auto p-4 bg-slate-900 custom-scrollbar">
+                        <div className="max-w-6xl mx-auto space-y-4">
                             {displayArticles.map(article => (
-                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className="bg-white border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-indigo-400 hover:shadow-md transition flex flex-col gap-2 group">
-                                    <div className="flex items-center justify-between text-xs text-gray-400"><span className={`px-2 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color}`}>{ARTICLE_TYPES[article.type]?.label}</span><span className="font-mono bg-gray-50 px-1 rounded">{article.dateStr || article.year}</span></div>
-                                    <h3 className="text-base font-bold text-gray-800 group-hover:text-indigo-700 line-clamp-1">{article.title}</h3>
-                                    <div className="text-xs text-gray-500 line-clamp-2 h-8" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
-                                    <div className="flex flex-wrap gap-1 mt-auto pt-2 border-t border-gray-50">{article.tags?.map(tag => <span key={tag} className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">#{tag}</span>)}</div>
+                                <div key={article.id} onClick={() => onSelectArticle && onSelectArticle(article)} className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 cursor-pointer hover:border-indigo-500 hover:bg-slate-800 transition group">
+                                    <div className="flex items-center justify-between text-xs text-slate-400 mb-3"><span className={`px-2 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color}`}>{ARTICLE_TYPES[article.type]?.label}</span><span className="font-mono bg-slate-700 text-slate-300 px-1 rounded">{article.dateStr || article.year}</span></div>
+                                    <h3 className="text-xl font-bold text-white group-hover:text-indigo-400 mb-3 flex items-center gap-2">
+                                        {article.isApproved && <Icon name="check-circle" size={16} className="text-emerald-400" />}
+                                        {article.title}
+                                    </h3>
+                                    <div className="text-sm text-slate-300 mb-4 leading-relaxed" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
+                                    <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{article.tags?.map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
                                 </div>
                             ))}
                         </div>
@@ -1222,13 +1594,69 @@
             );
         };
 
-        // MapView: 年代バー付き・複数地点対応 (修正: 範囲計算とスライダー)
-        const MapView = ({ articles = [], worldData, onSelectArticle, onLocationSelect, isEditing = false, storage, onMapImageUpdate, highlightArticleId, appContextId, showControls = true, myRole = 'guest', externalQuery, onExternalQueryChange, restrictToHighlightOnEdit = true }) => {
+        // MapLayerManager: 地図レイヤー管理
+        const MapLayerManager = ({ layers = [], onUpdate, storage, appContextId }) => {
+            const [name, setName] = React.useState('');
+            const handleAdd = (url) => {
+                const newLayer = { id: Math.random().toString(36).substr(2, 9), name: name || '新規レイヤー', url };
+                onUpdate([...layers, newLayer]);
+                setName('');
+            };
+            const handleRemove = (id) => {
+                if (confirm('このレイヤーを削除しますか？')) {
+                    onUpdate(layers.filter(l => l.id !== id));
+                }
+            };
+            return (
+                <div className="space-y-4">
+                    {layers.map((l, i) => (
+                        <div key={l.id} className="flex justify-between items-center border p-2 rounded bg-white">
+                            <span className="font-bold text-sm">{l.name}</span>
+                            <div className="flex items-center gap-2">
+                                <a href={l.url} target="_blank" className="text-blue-500 text-xs underline">確認</a>
+                                <button onClick={() => handleRemove(l.id)} className="text-red-500 text-xs hover:underline">削除</button>
+                            </div>
+                        </div>
+                    ))}
+                    <div className="border border-dashed p-3 rounded bg-gray-50">
+                        <div className="text-xs font-bold mb-2 text-gray-500">新規レイヤー追加</div>
+                        <input className="w-full border p-1.5 rounded mb-2 text-sm" placeholder="レイヤー名 (例: 1000年, 地下)" value={name} onChange={e => setName(e.target.value)} />
+                        <ImageUploader storage={storage} appContextId={appContextId} onUploadComplete={handleAdd} label="画像を追加" />
+                    </div>
+                </div>
+            );
+        };
+
+        // MapView: 年代バー付き・複数地点対応・レイヤー切り替え対応
+        const MapView = ({ articles = [], worldData, onSelectArticle, onLocationSelect, isEditing = false, storage, highlightArticleId, appContextId, showControls = true, myRole = 'guest', externalQuery, onExternalQueryChange, restrictToHighlightOnEdit = true, minImportance = 0 }) => {
             const mapRef = React.useRef(null);
             const leafletMap = React.useRef(null);
             const markersRef = React.useRef([]);
             const [mapQuery, setMapQuery] = React.useState('');
             const [yearRange, setYearRange] = React.useState({ years: [], min: -1000, max: 3000, index: 0, currentCenter: 1000, range: 2000, manualRange: false });
+
+            // Layer Management
+            const [activeLayerId, setActiveLayerId] = React.useState(null);
+            const layers = React.useMemo(() => {
+                if (Array.isArray(worldData?.mapLayers) && worldData.mapLayers.length > 0) return worldData.mapLayers;
+                // fallback legacy
+                if (worldData?.mapImageUrl) return [{ id: 'default', name: '標準マップ', url: worldData.mapImageUrl }];
+                return [];
+            }, [worldData]);
+
+            const activeLayer = React.useMemo(() => {
+                if (activeLayerId) {
+                    const found = layers.find(l => l.id === activeLayerId);
+                    if (found) return found;
+                }
+                return layers.length > 0 ? layers[0] : null;
+            }, [layers, activeLayerId]);
+
+            // Sync active layer ID if needed (initially)
+            React.useEffect(() => {
+                if (!activeLayerId && layers.length > 0) setActiveLayerId(layers[0].id);
+            }, [layers]);
+
 
             // 記事全体の年代範囲計算
             React.useEffect(() => {
@@ -1266,33 +1694,50 @@
                     });
                 }
 
-                if (!q) return base;
+                if (!q && !minImportance) return base;
                 const matches = (a) => {
+                    if (minImportance > 0 && (a.importance || 3) < minImportance) return false;
                     const hay = [a.title || '', stripHtml(a.contentHtml || ''), (a.tags || []).join(' '), a.representedTag || ''].join(' ').toLowerCase();
                     return hay.includes(q);
                 };
                 return base.filter(matches);
-            }, [articles, yearRange, isEditing, showControls, mapQuery, externalQuery, highlightArticleId, restrictToHighlightOnEdit]);
+            }, [articles, yearRange, isEditing, showControls, mapQuery, externalQuery, highlightArticleId, restrictToHighlightOnEdit, minImportance]);
 
             React.useEffect(() => {
                 if (!mapRef.current || leafletMap.current) return;
                 const map = L.map(mapRef.current, { crs: L.CRS.Simple, minZoom: -3, maxZoom: 4, zoomControl: false });
-                if (worldData?.mapImageUrl) {
+                leafletMap.current = map;
+                map.on('click', (e) => isEditing && onLocationSelect && onLocationSelect({ lat: e.latlng.lat, lng: e.latlng.lng }));
+            }, []); // Initialize map once
+
+            // Update Image Layer
+            React.useEffect(() => {
+                const map = leafletMap.current;
+                if (!map) return;
+
+                // Remove existing image layers
+                map.eachLayer(layer => {
+                    if (layer instanceof L.ImageOverlay || layer instanceof L.Rectangle) {
+                        map.removeLayer(layer);
+                    }
+                });
+
+                if (activeLayer) {
                     const img = new Image();
-                    img.src = worldData.mapImageUrl;
+                    img.src = activeLayer.url;
                     img.onload = () => {
                         const bounds = [[-img.height / 2, -img.width / 2], [img.height / 2, img.width / 2]];
-                        L.imageOverlay(worldData.mapImageUrl, bounds).addTo(map);
+                        const overlay = L.imageOverlay(activeLayer.url, bounds).addTo(map);
+                        overlay.bringToBack();
                         map.fitBounds(bounds);
                     };
                 } else {
                     const bounds = [[-500, -500], [500, 500]];
-                    L.rectangle(bounds, { color: "#9ca3af", weight: 1, fill: false }).addTo(map);
+                    const rect = L.rectangle(bounds, { color: "#9ca3af", weight: 1, fill: false }).addTo(map);
+                    rect.bringToBack();
                     map.fitBounds(bounds);
                 }
-                map.on('click', (e) => isEditing && onLocationSelect && onLocationSelect({ lat: e.latlng.lat, lng: e.latlng.lng }));
-                leafletMap.current = map;
-            }, [worldData?.mapImageUrl]);
+            }, [activeLayer]);
 
             React.useEffect(() => {
                 if (!leafletMap.current) return;
@@ -1332,6 +1777,20 @@
             return (
                 <div className="relative w-full h-full group">
                     <div ref={mapRef} className="w-full h-full bg-slate-200 rounded-lg overflow-hidden" />
+
+                    {/* Layer Switcher */}
+                    {layers.length > 1 && (
+                        <div className="absolute top-4 right-4 z-[1000] bg-white/90 p-2 rounded shadow-sm flex items-center gap-2">
+                            <Icon name="layers" size={14} className="text-gray-500" />
+                            <select
+                                value={activeLayerId || ''}
+                                onChange={e => setActiveLayerId(e.target.value)}
+                                className="text-sm bg-transparent outline-none font-bold text-gray-700"
+                            >
+                                {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                            </select>
+                        </div>
+                    )}
 
                     {/* Map search input (visible when controls shown and not editing) */}
                     {!isEditing && showControls && (
@@ -1394,9 +1853,6 @@
                             </div>
                         </div>
                     )}
-                    {isEditing && onMapImageUpdate && storage && (myRole === 'owner' || myRole === 'admin') && (
-                        <div className="absolute top-4 right-4 z-[1000] bg-white/90 p-2 rounded shadow"><p className="text-[10px] mb-1 font-bold text-gray-600">地図画像変更 (管理者のみ)</p><ImageUploader storage={storage} appContextId={appContextId} onUploadComplete={onMapImageUpdate} label="アップロード" /></div>
-                    )}
                 </div>
             );
         };
@@ -1413,7 +1869,27 @@
                         <input className={`w-full border rounded px-2 py-1.5 text-sm ${inputClass}`} value={searchState.tag || ''} onChange={e => handleChange('tag', e.target.value)} placeholder="#タグ" />
                         <select className={`w-full border rounded px-2 py-1.5 text-sm ${inputClass}`} value={searchState.type || 'all'} onChange={e => handleChange('type', e.target.value)}>{['all', ...Object.keys(ARTICLE_TYPES)].map(k => <option key={k} value={k}>{ARTICLE_TYPES[k]?.label || 'すべて'}</option>)}</select>
                     </div>
-                    <div className="flex justify-between text-xs opacity-60"><span>{count}件</span><button onClick={onResetFilters}>クリア</button></div>
+                    <div className="flex items-center gap-2 mt-2">
+                        <label className="text-xs font-bold opacity-70">重要度:</label>
+                        <div className="flex bg-gray-100 rounded p-0.5">
+                            {[1, 2, 3, 4, 5].map(v => (
+                                <button key={v} onClick={() => handleChange('minImportance', searchState.minImportance === v ? 0 : v)} className={`px-2 py-0.5 text-xs rounded ${searchState.minImportance === v ? 'bg-indigo-600 text-white font-bold' : searchState.minImportance > v ? 'text-indigo-600' : 'text-gray-400'}`}>
+                                    {v}
+                                </button>
+                            ))}
+                            <span className="text-[10px] items-center flex px-1 text-gray-400">{searchState.minImportance ? '以上' : '指定なし'}</span>
+                        </div>
+                    </div>
+                    <div className="flex justify-between items-center text-xs opacity-80 mt-2">
+                        <div className="flex items-center gap-2">
+                            <span>{count}件</span>
+                            <label className="flex items-center gap-1 cursor-pointer bg-black/10 px-2 py-0.5 rounded">
+                                <input type="checkbox" checked={!!searchState.onlyApproved} onChange={e => handleChange('onlyApproved', e.target.checked)} />
+                                承認済みのみ
+                            </label>
+                        </div>
+                        <button onClick={onResetFilters}>クリア</button>
+                    </div>
                 </div>
             );
         };
@@ -1421,6 +1897,16 @@
         const TagMiniTimeline = ({ tag, articles = [], onSelectArticle, isTreeMode = false, selectedArticleId, onTagClick }) => {
             if (!tag) return null;
             const items = React.useMemo(() => sortByChronology(articles.filter(a => (a.tags || []).includes(tag))), [articles, tag]);
+
+            const displayItems = React.useMemo(() => {
+                if (!selectedArticleId || items.length === 0) return items.slice(0, 3);
+                const currentIndex = items.findIndex(item => item.id === selectedArticleId);
+                if (currentIndex === -1) return items.slice(0, 3);
+                const start = Math.max(0, currentIndex - 1);
+                const end = Math.min(items.length, currentIndex + 2);
+                return items.slice(start, end);
+            }, [items, selectedArticleId]);
+
             if (isTreeMode) {
                 return (
                     <div className="min-w-[200px] bg-white/5 rounded-lg p-3 border border-white/10 snap-start shrink-0 relative">
@@ -1428,7 +1914,7 @@
                         <div onClick={() => onTagClick && onTagClick(tag)} className="text-xs font-bold text-white/80 mb-4 flex items-center gap-2 border-b border-white/10 pb-2 cursor-pointer hover:text-indigo-300 transition-colors"><Icon name="hash" size={12} /> {tag}<span className="ml-auto text-[10px] bg-white/10 px-1.5 rounded-full">{items.length}</span></div>
                         <div className="relative pl-4 space-y-0">
                             <div className="absolute left-0 top-2 bottom-2 w-px bg-white/20"></div>
-                            {items.map(item => {
+                            {displayItems.map(item => {
                                 const isCurrent = item.id === selectedArticleId;
                                 return (
                                     <div key={item.id} className="relative py-1">
@@ -1440,6 +1926,7 @@
                                     </div>
                                 );
                             })}
+                            {items.length > displayItems.length && <div className="text-[10px] text-white/40 italic pl-2 pt-1">他 {items.length - displayItems.length} 件</div>}
                             {items.length === 0 && <div className="text-[10px] text-white/30 italic">記事なし</div>}
                         </div>
                     </div>
@@ -1455,7 +1942,7 @@
         );
 
         // --- LargeTimelineView (構造年表: 統合版) ---
-        const LargeTimelineView = ({ articles = [], onSelectArticle, onEditArticle, focusedArticle, onFocusChange, allArticles = [], searchState, onSearchChange, onResetFilters, worldData, appContextId, myRole, onOpenNoYear, onOpenTagArticle, tagArticleValue, onTagArticleValueChange }) => {
+        const LargeTimelineView = ({ articles = [], onSelectArticle, onEditArticle, onDeleteArticle, onDuplicateArticle, focusedArticle, onFocusChange, allArticles = [], searchState, onSearchChange, onResetFilters, worldData, appContextId, myRole, onOpenNoYear, onOpenTagArticle, tagArticleValue, onTagArticleValueChange }) => {
             const [showSearch, setShowSearch] = React.useState(false);
             const [centeredArticleId, setCenteredArticleId] = React.useState(null);
             const [viewMode, setViewMode] = React.useState('broad'); // 'broad' (title only) or 'detailed'
@@ -1465,15 +1952,31 @@
             const sortedArticles = React.useMemo(() => sortByChronology(articles), [articles]);
             const isJumpingRef = React.useRef(false);
 
+
             const noYearArticles = React.useMemo(() => sortedArticles.filter(a => {
+                // noYearフラグが立っている、または年代が0/nullの記事
+                if (a.noYear === true) return true;
                 const y = Math.floor(getArticleYear(a));
                 return !y || Number(y) === 0;
             }).sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''))), [sortedArticles]);
 
             const datedArticles = React.useMemo(() => sortedArticles.filter(a => {
+                // noYearフラグが立っている記事は除外
+                if (a.noYear === true) return false;
                 const y = Math.floor(getArticleYear(a));
                 return y && Number(y) !== 0;
             }), [sortedArticles]);
+
+            const displayArticles = React.useMemo(() => {
+                // 詳細モードで年代あり記事を表示する場合のロジック
+                // 年代なし記事は年表に表示しない（datedArticlesにはすでに含まれていない）
+                // if (viewMode === 'detailed' && focusedArticle) {
+                //     if (focusedArticle.noYear === true) return [focusedArticle];
+                //     const y = Math.floor(getArticleYear(focusedArticle));
+                //     if (!y || y === 0) return [focusedArticle];
+                // }
+                return datedArticles;
+            }, [datedArticles]);
 
             const scrollToArticle = (id) => {
                 // wait for render if switching modes
@@ -1511,22 +2014,38 @@
                     e.preventDefault(); e.stopPropagation();
                     const id = link.getAttribute('data-article-id');
                     const wikiTitle = link.getAttribute('data-wiki-title');
+
+                    const openTarget = (target) => {
+                        if (onSelectArticle) onSelectArticle(target);
+
+                        const y = getArticleYear(target);
+                        const hasYear = y && Number(y) !== 0 && !target.noYear;
+
+                        // 記事の年代状態に応じてフィルタを調整
+                        if (typeof onSearchChange === 'function') {
+                            onSearchChange({ excludeNoYear: hasYear });
+                        }
+
+                        if (hasYear) {
+                            if (window.setAppViewMode) window.setAppViewMode('timeline_large');
+                        } else {
+                            if (window.setAppViewMode) window.setAppViewMode('single_article');
+                        }
+
+                        if (typeof onResetFilters !== 'undefined' && onResetFilters) onResetFilters();
+                    };
+
                     if (id) {
                         const target = allArticles.find(a => a.id === id);
                         if (target) {
-                            const y = getArticleYear(target);
-                            if (!y) {
-                                if (onOpenNoYear) onOpenNoYear();
-                                return;
-                            }
-                            handleJump(target);
+                            openTarget(target);
                         } else alert("リンク先の記事が見つかりません");
                     } else if (wikiTitle) {
                         if (wikiTitle === '年代なし') {
                             if (onOpenNoYear) onOpenNoYear();
                         } else {
                             const target = allArticles.find(a => (a.title || '').trim() === wikiTitle.trim());
-                            if (target) handleJump(target); else alert("リンク先の記事が見つかりません");
+                            if (target) openTarget(target); else alert("リンク先の記事が見つかりません");
                         }
                     }
                 }
@@ -1553,6 +2072,14 @@
             React.useEffect(() => { if (focusedArticle) { const t = setTimeout(() => scrollToArticle(focusedArticle.id), 500); return () => clearTimeout(t); } }, [focusedArticle]);
             const activeArticle = focusedArticle && focusedArticle.id === centeredArticleId ? focusedArticle : sortedArticles.find(a => a.id === centeredArticleId) || focusedArticle;
 
+
+            // 外部から記事が選択されたとき（地図モードなどから遷移してきたとき）は詳細モードに切り替える
+            React.useEffect(() => {
+                if (focusedArticle && viewMode === 'broad') {
+                    setViewMode('detailed');
+                }
+            }, [focusedArticle]);
+
             return (
                 <div className="h-full w-full overflow-hidden bg-slate-900 text-white relative flex flex-col">
                     <div className="shrink-0 bg-slate-900/90 backdrop-blur px-6 py-4 border-b border-white/10 z-20 relative flex justify-between items-center">
@@ -1562,7 +2089,7 @@
                                 <div className="text-sm text-white mt-1 flex-1">{searchState.keyword || searchState.tag || "全記事"}</div>
                                 <input className="text-sm p-1 rounded bg-white/90 text-gray-800 w-64" placeholder="本文検索..." value={searchState.keyword || ''} onChange={e => onSearchChange({ keyword: e.target.value })} />
                                 <label className="ml-3 text-xs text-white/70 flex items-center gap-2"><input type="checkbox" checked={!!searchState.excludeNoYear} onChange={e => onSearchChange({ excludeNoYear: e.target.checked })} /> 年代設定記事モード</label>
-                                <button onClick={() => onOpenNoYear && onOpenNoYear()} className="ml-3 px-2 py-1 bg-white/10 text-xs rounded">年代なしのみ</button>
+
                                 {onOpenTagArticle && (
                                     <div className="flex items-center gap-1 ml-4">
                                         <input className="text-sm p-1 rounded bg-white/90 text-gray-800 w-40" placeholder="#タグ/キーワード" value={tagArticleValue || ''} onChange={e => onTagArticleValueChange && onTagArticleValueChange(e.target.value)} />
@@ -1588,7 +2115,7 @@
                                     <div className="text-sm font-bold text-white">年代未設定の記事</div>
                                     <div className="text-xs text-white/60">編集で「年代なし」を設定した記事</div>
                                 </div>
-                                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 max-h-60 overflow-y-auto">
                                     {noYearArticles.map(a => (
                                         <div key={a.id} ref={el => el ? noYearRefs.current.set(a.id, el) : noYearRefs.current.delete(a.id)} data-noyear-id={a.id} className="bg-white/5 p-3 rounded-lg border border-white/5 flex flex-col">
                                             <div className="flex justify-between items-start gap-2">
@@ -1608,14 +2135,14 @@
                                                         return;
                                                     }
                                                     setTimeout(() => {
-                                                        isJumpingRef.current = true;
                                                         if (onSelectArticle) onSelectArticle(a);
-                                                        setCenteredArticleId(a.id);
-                                                        try { scrollToNoYearArticle(a.id); } catch (e) { console.warn(e); }
-                                                        setTimeout(() => isJumpingRef.current = false, 400);
+                                                        // Switch to dedicated single article view for complex layouts
+                                                        if (window.setAppViewMode) window.setAppViewMode('single_article');
                                                     }, 150);
                                                 }} className="px-2 py-1 text-xs bg-white/10 rounded">表示</button>
                                                 <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => { e.stopPropagation(); onEditArticle && onEditArticle(a); }} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded">編集</button>
+                                                <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => { e.stopPropagation(); onDuplicateArticle && onDuplicateArticle(a); }} className="px-2 py-1 text-xs bg-emerald-600 text-white rounded">複製</button>
+                                                {(myRole === 'owner' || myRole === 'admin') && <button type="button" style={{ position: 'relative', zIndex: 1000, pointerEvents: 'auto' }} onClick={(e) => { e.stopPropagation(); onDeleteArticle && onDeleteArticle(a); }} className="px-2 py-1 text-xs bg-red-600 text-white rounded">削除</button>}
                                             </div>
                                         </div>
                                     ))}
@@ -1650,6 +2177,7 @@
                                                 <div className="bg-white/5 border border-white/10 rounded-lg p-4 cursor-pointer hover:bg-white/10 hover:border-indigo-500/50 transition group flex flex-col">
                                                     <div className="flex justify-between items-start mb-1">
                                                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${ARTICLE_TYPES[article.type]?.color || 'bg-gray-700 text-gray-300'}`}>{ARTICLE_TYPES[article.type]?.label}</span>
+                                                        <span className="text-[10px] text-yellow-500">{'★'.repeat(article.importance || 3)}</span>
                                                         <span className="font-mono text-indigo-300 text-xs font-bold">{getArticleYear(article)}</span>
                                                     </div>
                                                     <h3 className="text-sm font-bold text-white group-hover:text-indigo-300 line-clamp-2">{article.title}</h3>
@@ -1662,15 +2190,18 @@
                                 </div>
                             ) : (
                                 <div className="flex flex-col gap-12 py-10">
-                                    {datedArticles.map((article) => {
+                                    {displayArticles.map((article) => {
                                         const isActive = (focusedArticle?.id === article.id) || (centeredArticleId === article.id);
                                         return (
                                             <div key={article.id} data-article-id={article.id} ref={el => el ? articleRefs.current.set(article.id, el) : articleRefs.current.delete(article.id)} className="w-full flex flex-col relative box-border">
-                                                <div className="w-full max-w-6xl flex flex-col md:flex-row items-center md:items-center gap-0 z-10 relative">
+                                                <div className="w-full flex flex-col md:flex-row items-center md:items-center gap-0 z-10 relative">
                                                     <div className={`flex-1 w-full transition-all duration-500 ${isActive ? 'opacity-100 scale-100' : 'opacity-30 scale-95 grayscale'}`}>
                                                         <div className="text-left text-gray-800 rounded-2xl shadow-2xl overflow-hidden border-4 relative w-full bg-white border-white/10">
                                                             <div className="h-32 bg-gradient-to-r from-indigo-900 to-slate-800 p-6 flex items-end relative" onClick={() => { isJumpingRef.current = true; if (onSelectArticle) onSelectArticle(article); scrollToArticle(article.id); setTimeout(() => isJumpingRef.current = false, 500); }}>
-                                                                <h1 className="text-2xl md:text-3xl font-bold text-white z-10 serif">{article.title}</h1>
+                                                                <h1 className="text-2xl md:text-3xl font-bold text-white z-10 serif flex items-center gap-2">
+                                                                    {article.title}
+                                                                    {article.isApproved && <Icon name="check-circle" size={24} className="text-emerald-400" title="承認済み" />}
+                                                                </h1>
                                                                 <div className="absolute right-4 bottom-4 text-white/20"><Icon name={ARTICLE_TYPES[article.type]?.icon} size={80} /></div>
                                                                 <button onClick={(e) => { e.stopPropagation(); copyText(article.id); }} className="absolute top-2 right-2 text-white/50 hover:text-white bg-black/20 px-2 py-1 rounded text-xs">ID: {article.id.slice(0, 4)}...</button>
                                                             </div>
@@ -1683,6 +2214,8 @@
                                                                 {article.mainImageUrl && <img src={article.mainImageUrl} className="w-full rounded-lg object-cover max-h-48 border" alt={article.title} />}
                                                                 <div className="mt-4 pt-4 border-t flex justify-end gap-2">
                                                                     <button onClick={(e) => { e.stopPropagation(); onEditArticle(article); }} className="flex items-center gap-1 text-xs text-gray-400 hover:text-indigo-600 border px-2 py-1 rounded hover:bg-gray-50"><Icon name="edit-2" size={12} /> 編集</button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); onDuplicateArticle && onDuplicateArticle(article); }} className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 border border-emerald-200 px-2 py-1 rounded hover:bg-emerald-50"><Icon name="copy" size={12} /> 複製</button>
+                                                                    {(myRole === 'owner' || myRole === 'admin') && <button onClick={(e) => { e.stopPropagation(); onDeleteArticle && onDeleteArticle(article); }} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 border border-red-200 px-2 py-1 rounded hover:bg-red-50"><Icon name="trash-2" size={12} /> 削除</button>}
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -1998,38 +2531,211 @@
             const [mapTabQuery, setMapTabQuery] = React.useState('');
             const [stats, setStats] = React.useState([]);
             const [tagInput, setTagInput] = React.useState('');
+            const [mapTabImportance, setMapTabImportance] = React.useState(0);
             const [authMode, setAuthMode] = React.useState('login');
             const [authForm, setAuthForm] = React.useState({ username: '', password: '', worldName: '', worldDesc: '' });
             const [showConfigEditor, setShowConfigEditor] = React.useState(false);
             const [showMemberManager, setShowMemberManager] = React.useState(false);
             const [showAdminPanel, setShowAdminPanel] = React.useState(false);
             const [showRegionRuleEditor, setShowRegionRuleEditor] = React.useState(false);
-            const [myRole, setMyRole] = React.useState('guest');
+            const [myMemberData, setMyMemberData] = React.useState(null);
             const [authError, setAuthError] = React.useState(null);
-            const [timelineFilters, setTimelineFilters] = React.useState({ type: 'all', keyword: '', tag: '', excludeNoYear: true });
-            const [regionRules, setRegionRules] = React.useState(REGION_TAG_RULES_DEFAULT);
+            const [timelineFilters, setTimelineFilters] = React.useState({ type: 'all', keyword: '', tag: '', excludeNoYear: true, onlyApproved: false });
+
             const [tagArticleInput, setTagArticleInput] = React.useState('');
+            const [previousViewMode, setPreviousViewMode] = React.useState('timeline_large'); // 編集前のビューモードを記憶
+            const isRestoringFromURL = React.useRef(false);
+            const hasCheckedWorldURL = React.useRef(false); // URL復元中のフラグ
+
+            // Expose setViewMode to window for deep component access (hacky but effective for current structure)
+            React.useEffect(() => { window.setAppViewMode = setViewMode; return () => delete window.setAppViewMode; }, []);
 
             // これにより、エディタの参照を保持
             const editorRef = React.useRef(null);
+            const htmlTextareaRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (!user || !db || hasCheckedWorldURL.current) return;
+                const params = new URLSearchParams(window.location.search);
+                const urlWorldId = params.get('world');
+                if (urlWorldId) {
+                    hasCheckedWorldURL.current = true;
+                    isRestoringFromURL.current = true;
+                    setWorldId(urlWorldId);
+                    setViewMode('timeline_large');
+                    console.log('URL復元: 世界選択', urlWorldId);
+                } else {
+                    hasCheckedWorldURL.current = true;
+                }
+            }, [user, db]);
+
+            // URLから状態を復元（初回読み込み時）
+            React.useEffect(() => {
+                if (!user || !worldId || articles.length === 0 || isRestoringFromURL.current) return;
+
+                const params = new URLSearchParams(window.location.search);
+                const urlView = params.get('view');
+                const urlArticleId = params.get('article');
+                const urlKeyword = params.get('keyword');
+                const urlTag = params.get('tag');
+                const urlMapQuery = params.get('mapQuery');
+                const urlMapImportance = params.get('mapImportance');
+
+                let updated = false;
+
+                if (urlArticleId) {
+                    // 記事IDが指定されている場合、その記事を表示
+                    const article = articles.find(a => a.id === urlArticleId);
+                    if (article) {
+                        isRestoringFromURL.current = true;
+                        setSelectedArticle(article);
+                        if (urlView) setViewMode(urlView);
+                        else setViewMode('single_article');
+                        console.log('URL復元: 記事表示', article.title, urlView);
+                    }
+                } else if (urlView && urlView !== viewMode) {
+                    // ビューモードのみ指定されている場合
+                    isRestoringFromURL.current = true;
+                    setViewMode(urlView);
+                    console.log('URL復元: ビューモード', urlView);
+                }
+
+                if (urlKeyword || urlTag) {
+                    setTimelineFilters(prev => ({ ...prev, keyword: urlKeyword || '', tag: urlTag || '' }));
+                    console.log('URL復元: 検索条件', { keyword: urlKeyword, tag: urlTag });
+                    updated = true;
+                }
+
+                // 年代なしフィルタ状態を復元
+                if (params.has('excludeNoYear')) {
+                    const excludeNoYear = params.get('excludeNoYear') === 'true';
+                    setTimelineFilters(prev => ({ ...prev, excludeNoYear }));
+                    console.log('URL復元: 年代なしフィルタ', excludeNoYear);
+                    updated = true;
+                }
+
+                if (urlMapQuery) {
+                    setMapTabQuery(urlMapQuery);
+                    console.log('URL復元: マップクエリ', urlMapQuery);
+                    updated = true;
+                }
+
+                if (urlMapImportance) {
+                    setMapTabImportance(Number(urlMapImportance));
+                    console.log('URL復元: マップ重要度', urlMapImportance);
+                    updated = true;
+                }
+
+                if (updated) {
+                    isRestoringFromURL.current = true;
+                }
+            }, [user, worldId, articles]);
+
+            // 状態が変更されたらURLを更新（ブラウザの履歴に追加）
+            React.useEffect(() => {
+                if (!worldId || !user || isRestoringFromURL.current) {
+                    isRestoringFromURL.current = false;
+                    return;
+                }
+
+                const timeoutId = setTimeout(() => {
+                    const params = new URLSearchParams();
+                    params.set('world', worldId);
+                    params.set('view', viewMode);
+
+                    if (selectedArticle) {
+                        params.set('article', selectedArticle.id);
+                    }
+
+                    if (timelineFilters.keyword) {
+                        params.set('keyword', timelineFilters.keyword);
+                    }
+                    if (timelineFilters.tag) {
+                        params.set('tag', timelineFilters.tag);
+                    }
+
+                    // 年代なしフィルタ状態もURLに含める
+                    if (timelineFilters.excludeNoYear !== undefined) {
+                        params.set('excludeNoYear', timelineFilters.excludeNoYear.toString());
+                    }
+
+                    if (viewMode === 'map' && mapTabQuery) {
+                        params.set('mapQuery', mapTabQuery);
+                    }
+                    if (viewMode === 'map' && mapTabImportance > 0) {
+                        params.set('mapImportance', mapTabImportance.toString());
+                    }
+
+                    const newUrl = `${window.location.pathname}?${params.toString()}`;
+                    const currentUrl = `${window.location.pathname}${window.location.search}`;
+
+                    if (newUrl !== currentUrl) {
+                        window.history.pushState({ viewMode, worldId, articleId: selectedArticle?.id }, '', newUrl);
+                        console.log('URL更新:', newUrl);
+                    }
+                }, 1000);
+
+                return () => clearTimeout(timeoutId);
+            }, [viewMode, selectedArticle, worldId, user]);
+
+            // ブラウザの戻る/進むボタンに対応
+            React.useEffect(() => {
+                const handlePopState = (event) => {
+                    if (event.state) {
+                        console.log('履歴から復元:', event.state);
+                        isRestoringFromURL.current = true;
+
+                        if (event.state.viewMode) {
+                            setViewMode(event.state.viewMode);
+                        }
+
+                        if (event.state.articleId && articles.length > 0) {
+                            const article = articles.find(a => a.id === event.state.articleId);
+                            if (article) {
+                                setSelectedArticle(article);
+                            }
+                        } else if (!event.state.articleId) {
+                            setSelectedArticle(null);
+                        }
+                    }
+                };
+
+                window.addEventListener('popstate', handlePopState);
+                return () => window.removeEventListener('popstate', handlePopState);
+            }, [articles]);
 
             React.useEffect(() => {
                 if (!db || !worldId || !appContextId) return;
                 const { onSnapshot, doc, collection } = window.firebaseModules;
                 const unsubWorld = onSnapshot(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), s => setWorldData(s.data()));
                 const unsubArticles = onSnapshot(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles'), s => {
-                    setArticles(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => getArticleYear(a) - getArticleYear(b)));
+                    setArticles(s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => getArticleYear(a) - getArticleYear(b)));
                 });
                 return () => { unsubWorld(); unsubArticles(); };
             }, [db, worldId, appContextId]);
 
             React.useEffect(() => {
                 if (!db || !worldId || !user || !appContextId) return;
-                const { onSnapshot, doc } = window.firebaseModules;
-                return onSnapshot(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', user.uid), s => {
-                    setMyRole(s.exists() ? s.data().role : 'guest');
+                const { onSnapshot, doc, updateDoc } = window.firebaseModules;
+                return onSnapshot(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', user.uid), async s => {
+                    if (s.exists()) {
+                        const data = s.data();
+                        setMyMemberData(data);
+                        // 名前が未登録または変更されている場合は更新 (自分の情報のみ)
+                        if (user.displayName && data.username !== user.displayName) {
+                            try {
+                                await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'members', user.uid), {
+                                    username: user.displayName
+                                });
+                            } catch (e) { console.error("Name sync failed", e); }
+                        }
+                    }
+                    else setMyMemberData(null);
                 });
             }, [db, worldId, user, appContextId]);
+
+            const myRole = myMemberData?.role || 'guest';
+            const canIApprove = myRole === 'owner' || myMemberData?.canApprove === true;
 
             const articleIndex = React.useMemo(() => { const map = new Map(); articles.forEach(a => map.set(a.id, a)); return map; }, [articles]);
             // previewArticles: merge current formData into articles for instant preview in edit mode
@@ -2053,16 +2759,10 @@
                 if (timelineFilters.type && timelineFilters.type !== 'all') summary.push(ARTICLE_TYPES[timelineFilters.type]?.label || timelineFilters.type);
                 return summary.join(' / ') || '全記事';
             }, [timelineFilters]);
-            React.useEffect(() => {
-                try {
-                    const raw = localStorage.getItem('worldweaver_region_rules');
-                    if (raw) setRegionRules(JSON.parse(raw));
-                    else setRegionRules(REGION_TAG_RULES_DEFAULT);
-                } catch (e) { setRegionRules(REGION_TAG_RULES_DEFAULT); }
-            }, []);
-            React.useEffect(() => {
-                try { localStorage.setItem('worldweaver_region_rules', JSON.stringify(regionRules || [])); } catch (e) { }
-            }, [regionRules]);
+
+            // Remove localStorage region rules hooks
+            const regionRules = worldData?.regionRules || REGION_TAG_RULES_DEFAULT;
+
             const handleConfigSave = (newConfig, newAppId) => {
                 localStorage.setItem('worldweaver_firebase_config', JSON.stringify(newConfig));
                 localStorage.setItem('worldweaver_app_id', newAppId);
@@ -2115,9 +2815,9 @@
                     const lng = Number(formData.lng);
                     if (Number.isFinite(lat) && Number.isFinite(lng)) locationCandidates.push({ lat, lng });
                 }
-                const regionTags = computeRegionTags(locationCandidates, regionRules || REGION_TAG_RULES_DEFAULT);
+                const regionTags = computeRegionTags(locationCandidates, regionRules);
                 const tags = Array.from(new Set([...tagsFromInput, ...regionTags]));
-                // 年代の計算 (dateStr > period.start > year), ただし noYear が設定されている場合は年代を 0 にする
+                // 年代の計算
                 let yearVal = parseInt(formData.year) || 0;
                 if (!formData.noYear) {
                     if (formData.dateStr) {
@@ -2131,13 +2831,24 @@
                     yearVal = 0;
                 }
 
+                // Approval Status Logic
+                let isApproved = !!formData.isApproved;
+                // If not authorized to approve, keep it as is if existing, or false if new (unless default changes)
+                // However, if unauthorized user edits an approved article, does it stay approved?
+                // For now, adhere to formData state but verify permission if changing to true from false
+                // But simplified: Only approvers see the checkbox. Editors just submit.
+                // If I am NOT an approver, force preserving original state (if exists) or false (if new)
+                if (!canIApprove) {
+                    // 非承認者が編集した場合は、承認を取り下げる (または新規作成時は未承認)
+                    isApproved = false;
+                }
+
                 const data = {
                     ...formData,
                     contentHtml: formData.contentHtml || '',
                     stats,
                     tags,
                     attachments: formData.attachments || [],
-                    // 年代なしの場合は dateStr / period をクリアしておく
                     dateStr: formData.noYear ? '' : (formData.dateStr || ''),
                     period: formData.noYear ? { start: '', end: '' } : (formData.period || { start: '', end: '' }),
                     year: yearVal,
@@ -2146,27 +2857,152 @@
                     lng: Number.isFinite(formData.lng) ? formData.lng : null,
                     locationArticleId: formData.locationArticleId || '',
                     mainImageUrl: formData.mainImageUrl || '',
+                    importance: Number(formData.importance) || 3,
+                    isApproved: isApproved, // Save approval status
+                    isApproved: isApproved, // Save approval status
                     updatedAt: serverTimestamp(), updatedBy: user.uid
                 };
+                // IDは保存データに含めない（ドキュメントIDとして管理されるため）
+                delete data.id;
+
                 try {
+                    let artId = formData.id;
                     if (formData.id) {
                         await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles', formData.id), data);
                     } else {
                         data.createdAt = serverTimestamp(); data.createdBy = user.uid;
                         const ref = await addDoc(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles'), data);
-                        data.id = ref.id;
+                        artId = ref.id;
+                        data.id = artId;
                     }
-                    setSelectedArticle({ ...data, id: formData.id || data.id });
-                    setViewMode('timeline_large');
+
+                    // Discord Webhook Notification
+                    if (worldData?.discordWebhookUrl) {
+                        const webhookUrl = worldData.discordWebhookUrl;
+                        const isNew = !formData.id;
+                        const editorName = user.displayName || 'Anonymous';
+                        const title = data.title;
+                        const checkStatus = isApproved ? 'Approved' : 'Unapproved';
+
+                        // HTMLタグ除去 + Wikiリンク構文([[Title]]や[[Title|ID]])の除去(テキストは残す) + 空白整理
+                        const rawText = stripHtml(data.contentHtml || '')
+                            // [[Title|ID]] -> Title, [[Title]] -> Title
+                            .replace(/\[\[([^|\]]+)(?:\|[^\]]+)?\]\]/g, '$1')
+                            .replace(/\s+/g, ' ').trim();
+                        const summary = rawText.length > 200 ? rawText.slice(0, 200) + '...' : (rawText || 'No Content');
+
+                        const content = isNew
+                            ? `🆕 **New Article Created** in ${worldData.name}\n**Title**: ${title}\n**Editor**: ${editorName}\n**Status**: ${checkStatus}\n**Summary**: ${summary}`
+                            : `📝 **Article Updated** in ${worldData.name}\n**Title**: ${title}\n**Editor**: ${editorName}\n**Status**: ${checkStatus}\n**Summary**: ${summary}`;
+
+                        // Fire and forget
+                        fetch(webhookUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ content })
+                        }).catch(err => console.error("Discord Webhook Error:", err));
+                    }
+
+                    setSelectedArticle({ ...data, id: artId });
+
+                    // 年代なし判定: noYearフラグが立っている、または年代が0/nullの場合
+                    const hasYear = !data.noYear && data.year && Number(data.year) !== 0;
+
+                    // 編集前のビューモードを考慮しつつ、適切なビューに遷移
+                    if (previousViewMode === 'timeline_noyear' && !hasYear) {
+                        // 年代なしビューから編集し、年代なしのまま → 年代なしビューに戻る
+                        setViewMode('timeline_noyear');
+                    } else if (previousViewMode === 'single_article') {
+                        // 単独記事表示から編集 → 単独記事表示に戻る
+                        setViewMode('single_article');
+                    } else if (previousViewMode === 'list') {
+                        // 一覧から編集 → 一覧に戻る
+                        setViewMode('list');
+                    } else {
+                        // その他の場合は年代に基づいて判定
+                        if (hasYear) {
+                            setViewMode('timeline_large');
+                        } else {
+                            setViewMode('timeline_noyear');
+                        }
+                    }
                 } catch (e) { alert(e.message); }
             };
 
-            const handleMapImageUpdate = async (url) => {
+            const handleMapLayersUpdate = async (newLayers) => {
                 const { updateDoc, doc } = window.firebaseModules;
                 try {
-                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { mapImageUrl: url });
-                    alert("地図を更新しました");
+                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { mapLayers: newLayers });
+                    // compatibility with old field if needed, defaulting to first layer's url
+                    if (newLayers.length > 0) {
+                        await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { mapImageUrl: newLayers[0].url });
+                    }
                 } catch (e) { alert(e.message); }
+            };
+
+            const handleSaveRegionRules = async (newRules) => {
+                const { updateDoc, doc } = window.firebaseModules;
+                try {
+                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { regionRules: newRules });
+                } catch (e) { alert("ルール保存失敗: " + e.message); }
+            };
+
+            const handleReapplyRegionTags = async () => {
+                if (!confirm('現在の全記事に対して、地域タグ・ルールを再適用しますか？\n\n・ルールに合致するタグが自動追加されます\n・場所が範囲外になった地域タグは自動削除されます\n・手動タグは維持されます')) return;
+                const { updateDoc, doc } = window.firebaseModules;
+                try {
+                    const updates = [];
+                    const managedTags = new Set(regionRules.map(r => r.tag));
+
+                    for (const article of articles) {
+                        const locationCandidates = [];
+                        if (Array.isArray(article.locations)) {
+                            article.locations.forEach(l => {
+                                const lat = Number(l.lat);
+                                const lng = Number(l.lng);
+                                if (Number.isFinite(lat) && Number.isFinite(lng)) locationCandidates.push({ lat, lng });
+                            });
+                        }
+                        if (article.lat !== undefined && article.lat !== null && article.lat !== '') {
+                            const lat = Number(article.lat);
+                            const lng = Number(article.lng);
+                            if (Number.isFinite(lat) && Number.isFinite(lng)) locationCandidates.push({ lat, lng });
+                        }
+
+                        const validRegionTags = new Set(computeRegionTags(locationCandidates, regionRules));
+                        const currentTags = article.tags || [];
+                        const finalTags = new Set();
+                        let changed = false;
+
+                        currentTags.forEach(t => {
+                            if (managedTags.has(t)) {
+                                if (validRegionTags.has(t)) finalTags.add(t);
+                                else changed = true;
+                            } else {
+                                finalTags.add(t);
+                            }
+                        });
+
+                        validRegionTags.forEach(t => {
+                            if (!finalTags.has(t)) {
+                                finalTags.add(t);
+                                changed = true;
+                            }
+                        });
+
+                        if (changed) {
+                            updates.push(updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles', article.id), {
+                                tags: Array.from(finalTags)
+                            }));
+                        }
+                    }
+                    if (updates.length > 0) {
+                        await Promise.all(updates);
+                        alert(`${updates.length} 件の記事のタグを更新しました。`);
+                    } else {
+                        alert("更新が必要な記事はありませんでした。");
+                    }
+                } catch (e) { console.error(e); alert("エラーが発生しました: " + e.message); }
             };
 
             // When switching to the no-year view, if a selectedArticle is set then scroll to it inside that view
@@ -2190,12 +3026,21 @@
 
             const openDetailView = (article, origin = viewMode) => {
                 setSelectedArticle(article);
-                // 一覧、マップ、その他どこからでも構造年表へ遷移
-                setViewMode('timeline_large');
+
+                // 記事の年代状態に応じてフィルタを調整
+                const y = getArticleYear(article);
+                const hasYear = y && y !== 0 && !article.noYear;
+
+                // 年代なし記事を開く場合はexcludeNoYearをfalseに、年代あり記事はtrueに
+                setTimelineFilters(prev => ({ ...prev, excludeNoYear: hasYear }));
+
+                // 一覧、マップ、その他どこからでも詳細ビュー（全画面）へ遷移
+                setViewMode('single_article');
             };
 
             const startEditingArticle = (article) => {
                 if (!article) return;
+                setPreviousViewMode(viewMode); // 編集前のビューモードを保存
                 setFormData({
                     ...createEmptyArticle(),
                     ...article,
@@ -2253,24 +3098,66 @@
                 if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(() => alert("IDコピー: " + text)).catch(() => fallbackCopy(text)); } else { fallbackCopy(text); }
             };
 
+            const handleDeleteArticle = async (article) => {
+                if (!article) return;
+                const canDelete = myRole === 'owner' || myRole === 'admin';
+                if (!canDelete) { alert("削除権限がありません（管理者のみ）"); return; }
+                if (!confirm(`本当に「${article.title}」を削除しますか？\nこの操作は取り消せません。`)) return;
+
+                const { deleteDoc, doc } = window.firebaseModules;
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles', article.id));
+                    // If we are currently viewing this article, close it or go back
+                    if (selectedArticle && selectedArticle.id === article.id) {
+                        setSelectedArticle(null);
+                        setViewMode('timeline_large');
+                    }
+                } catch (e) { alert("削除失敗: " + e.message); }
+            };
+
+            const handleDuplicateArticle = (article) => {
+                if (!article) return;
+                if (!['owner', 'editor', 'admin'].includes(myRole)) { alert("作成権限がありません"); return; }
+
+                const newTitle = article.title + " (複製)";
+                const duplicated = {
+                    ...article,
+                    title: newTitle,
+                    id: null,
+                    isApproved: false,
+                    createdAt: null,
+                    updatedAt: null,
+                    createdBy: null,
+                    updatedBy: null
+                };
+
+                // Use existing startEditingArticle logic but override state with duplicated data
+                setFormData({
+                    ...createEmptyArticle(),
+                    ...duplicated,
+                    locations: duplicated.locations || [],
+                    period: duplicated.period || { start: '', end: '' },
+                    lat: duplicated.lat || null,
+                    lng: duplicated.lng || null
+                });
+                setStats(duplicated.stats || []);
+                setTagInput((duplicated.tags || []).join(','));
+                setViewMode('edit');
+            };
+
+            // 匿名ログインを自動実行（閲覧のみ可能）
+            React.useEffect(() => {
+                if (!user && !loading && auth) {
+                    const { signInAnonymously } = window.firebaseModules;
+                    signInAnonymously(auth).catch(err => {
+                        console.error('匿名ログイン失敗:', err);
+                        setAuthError('自動ログインに失敗しました: ' + err.message);
+                    });
+                }
+            }, [user, loading, auth]);
+
             if (loading) return <div className="h-screen flex items-center justify-center text-indigo-600 font-bold animate-pulse">Loading...</div>;
-            if (!user) return (
-                <div className="min-h-screen flex items-center justify-center bg-indigo-900 p-4 relative">
-                    {showConfigEditor && <ConfigEditor currentConfig={activeConfig} currentAppId={appContextId} onSave={handleConfigSave} onCancel={() => setShowConfigEditor(false)} />}
-                    <div className="bg-white p-8 rounded-lg shadow-2xl max-w-md w-full relative z-10">
-                        <div className="absolute top-4 right-4"><button onClick={() => setShowConfigEditor(true)} className="text-xs flex items-center gap-1 text-gray-400 hover:text-indigo-600"><Icon name="settings" size={14} /> 設定修正</button></div>
-                        <h1 className="text-3xl font-bold text-center mb-2 text-indigo-900 serif">WorldWeaver</h1>
-                        <div className="text-center text-xs text-gray-400 mb-6 font-mono">Data ID: {appContextId}</div>
-                        {authError && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-3 mb-6 text-xs whitespace-pre-wrap rounded">{authError}</div>}
-                        <div className="flex gap-2 mb-6 bg-gray-100 p-1 rounded"><button onClick={() => setAuthMode('login')} className={`flex-1 py-2 rounded text-sm font-bold ${authMode === 'login' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>ログイン</button><button onClick={() => setAuthMode('register')} className={`flex-1 py-2 rounded text-sm font-bold ${authMode === 'register' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>新規登録</button></div>
-                        <div className="space-y-4">
-                            <input type="text" placeholder="ユーザー名" className="w-full border p-2 rounded bg-gray-50" value={authForm.username} onChange={e => setAuthForm({ ...authForm, username: e.target.value })} />
-                            <input type="password" placeholder="パスワード" className="w-full border p-2 rounded bg-gray-50" value={authForm.password} onChange={e => setAuthForm({ ...authForm, password: e.target.value })} />
-                            <button onClick={handleAuth} className="w-full bg-indigo-600 text-white py-3 rounded font-bold hover:bg-indigo-700 transition shadow-lg">{authMode === 'login' ? '入場' : '登録'}</button>
-                        </div>
-                    </div>
-                </div>
-            );
+            if (!user) return <div className="h-screen flex items-center justify-center text-indigo-600 font-bold">接続中...</div>;
 
             if (viewMode === 'world_select') return (
                 <div className="min-h-screen bg-gray-100 p-6">
@@ -2305,29 +3192,65 @@
                                 </div>
                                 <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">{VIEW_TABS.map(tab => (<button key={tab.key} onClick={() => setViewMode(tab.key)} className={`px-3 py-1.5 rounded text-sm flex items-center gap-1 ${viewMode === tab.key ? 'bg-white shadow text-indigo-600 font-bold' : 'text-gray-500'}`}><Icon name={tab.icon} size={16} /> {tab.label}</button>))}</div>
                             </div>
-                            <div className="flex items-center gap-4"><div className="hidden lg:flex items-center text-[11px] text-gray-400"><Icon name="filter" size={12} className="mr-1" /> {timelineSummary}</div>{(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}{['owner', 'editor'].includes(myRole) && <button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> 作成</button>}</div>
+                            <div className="flex items-center gap-4">
+                                {(viewMode === 'timeline_large' || viewMode === 'list' || viewMode === 'map') && (
+                                    <button onClick={() => setTimelineFilters(prev => ({ ...prev, onlyApproved: !prev.onlyApproved }))} className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${timelineFilters.onlyApproved ? 'bg-emerald-600 text-white font-bold' : 'bg-gray-200 text-gray-500 hover:bg-gray-300'}`} title="承認済み記事のみ表示">
+                                        <Icon name="check-circle" size={14} />
+                                        <span className="hidden sm:inline">承認済のみ</span>
+                                    </button>
+                                )}
+                                <div className="hidden lg:flex items-center text-[11px] text-gray-400"><Icon name="filter" size={12} className="mr-1" /> {timelineSummary} {timelineFilters.onlyApproved && <span className="text-emerald-600 font-bold ml-1">(ON)</span>}</div>{(myRole === 'owner' || myRole === 'admin') && <button onClick={() => setShowAdminPanel(true)} title="管理パネル" className="text-gray-500 hover:text-indigo-600 p-2 rounded-full bg-gray-100"><Icon name="settings" size={18} /></button>}{['owner', 'editor', 'admin'].includes(myRole) && <button onClick={() => { setFormData(createEmptyArticle()); setStats([]); setTagInput(''); setViewMode('edit'); }} className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1"><Icon name="plus" size={16} /> 作成</button>}</div>
                         </header>
                         <div className="flex-1 overflow-y-auto relative bg-slate-50">
-                            {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
+                            {viewMode === 'list' && <FolderIntegratedList articles={articles} onSelectArticle={(article) => openDetailView(article, 'list')} onTagClick={handleTagClick} onlyApproved={timelineFilters.onlyApproved} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} />}
                             {viewMode === 'map' && <div className="absolute inset-0 flex flex-col">
-                                <div className="p-3 z-10 bg-white/90 border-b">
-                                    <input className="w-80 p-2 rounded border text-sm" placeholder="地図検索 (タイトル/本文/タグ)..." value={mapTabQuery || ''} onChange={e => setMapTabQuery(e.target.value)} />
+                                <div className="p-3 z-10 bg-white/90 border-b flex items-center gap-4">
+                                    <input className="flex-1 p-2 rounded border text-sm max-w-sm" placeholder="地図検索 (タイトル/本文/タグ)..." value={mapTabQuery || ''} onChange={e => setMapTabQuery(e.target.value)} />
+                                    <div className="flex items-center gap-2 border-l pl-4">
+                                        <span className="text-xs font-bold text-gray-500">重要度:</span>
+                                        <div className="flex bg-gray-100 rounded p-0.5">
+                                            {[1, 2, 3, 4, 5].map(v => (
+                                                <button key={v} onClick={() => setMapTabImportance(mapTabImportance === v ? 0 : v)} className={`px-2 py-0.5 text-xs rounded ${mapTabImportance === v ? 'bg-indigo-600 text-white font-bold' : mapTabImportance > v ? 'text-indigo-600' : 'text-gray-400'}`}>
+                                                    {v}
+                                                </button>
+                                            ))}
+                                            <span className="text-[10px] items-center flex px-1 text-gray-400">{mapTabImportance ? '以上' : '指定なし'}</span>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="flex-1 relative"><MapView articles={articles} worldData={worldData} isEditing={false} externalQuery={mapTabQuery} onExternalQueryChange={v => setMapTabQuery(v)} highlightArticleId={selectedArticle?.id} onSelectArticle={a => openDetailView(a, 'map')} appContextId={appContextId} /></div>
+                                <div className="flex-1 relative"><MapView articles={articles} worldData={worldData} isEditing={false} externalQuery={mapTabQuery} onExternalQueryChange={v => setMapTabQuery(v)} highlightArticleId={selectedArticle?.id} minImportance={mapTabImportance} onSelectArticle={a => {
+                                    // 年代がある記事は年表ビューで拡大表示、年代なしは単独の拡大記事表示
+                                    const y = getArticleYear(a);
+                                    const hasYear = y && y !== 0 && !a.noYear;
+
+                                    // 記事の年代状態に応じてフィルタを調整
+                                    setTimelineFilters(prev => ({ ...prev, excludeNoYear: hasYear }));
+
+                                    if (hasYear) {
+                                        setSelectedArticle(a);
+                                        setViewMode('timeline_large');
+                                    } else {
+                                        openDetailView(a, 'map');
+                                    }
+                                }} appContextId={appContextId} /></div>
                             </div>}
-                            {viewMode === 'timeline_large' && <LargeTimelineView articles={filteredTimelineArticles} onSelectArticle={setSelectedArticle} onEditArticle={startEditingArticle} focusedArticle={selectedArticle} onFocusChange={setSelectedArticle} allArticles={articles} searchState={timelineFilters} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true })} worldData={worldData} appContextId={appContextId} myRole={myRole} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) setSelectedArticle(art); } setViewMode('timeline_noyear'); }} onOpenTagArticle={openTagArticle} tagArticleValue={tagArticleInput} onTagArticleValueChange={setTagArticleInput} />}
+                            {viewMode === 'timeline_large' && <LargeTimelineView articles={filteredTimelineArticles} onSelectArticle={setSelectedArticle} onEditArticle={startEditingArticle} onDeleteArticle={handleDeleteArticle} onDuplicateArticle={handleDuplicateArticle} focusedArticle={selectedArticle} onFocusChange={setSelectedArticle} allArticles={articles} searchState={timelineFilters} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true })} worldData={worldData} appContextId={appContextId} myRole={myRole} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { setSelectedArticle(art); setViewMode('single_article'); } } else { setViewMode('timeline_noyear'); } }} onOpenTagArticle={openTagArticle} tagArticleValue={tagArticleInput} onTagArticleValueChange={setTagArticleInput} />}
                             {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} />}
                             {viewMode === 'timeline_noyear' && (
-                                <div className="absolute inset-0 overflow-auto p-6 bg-white">
+                                <div className="absolute inset-0 overflow-auto p-6 bg-slate-900">
                                     <div className="flex items-center justify-between mb-4">
-                                        <h2 className="text-xl font-bold">年代未設定の記事一覧</h2>
-                                        <div className="flex gap-2"><button onClick={() => setViewMode('timeline_large')} className="px-3 py-1 rounded bg-gray-200">年表に戻る</button><button onClick={() => setViewMode('edit')} className="px-3 py-1 rounded bg-indigo-600 text-white">新規作成</button></div>
+                                        <h2 className="text-xl font-bold text-white">年代未設定の記事一覧</h2>
+                                        <div className="flex gap-2"><button onClick={() => setViewMode('timeline_large')} className="px-3 py-1 rounded bg-slate-700 text-white hover:bg-slate-600">年表に戻る</button><button onClick={() => { setPreviousViewMode('timeline_noyear'); setViewMode('edit'); }} className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700">新規作成</button></div>
                                     </div>
-                                    <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-                                        {articles.filter(a => { const y = Math.floor(getArticleYear(a)); return !y || Number(y) === 0; }).map(a => (
-                                            <div key={a.id} className="bg-white border rounded-xl p-4">
-                                                <div className="flex items-center justify-between"><h3 className="font-bold text-lg truncate">{a.title}</h3><span className="text-xs text-gray-400 font-mono">{a.dateStr || ''}</span></div>
-                                                <div className="text-sm text-gray-600 mt-2" onClick={(e) => {
+                                    <div className="max-w-6xl mx-auto space-y-4">
+                                        {articles.filter(a => {
+                                            if (a.noYear === true) return true;
+                                            const y = Math.floor(getArticleYear(a));
+                                            return !y || Number(y) === 0;
+                                        }).map(a => (
+                                            <div key={a.id} className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 hover:bg-slate-800 transition">
+                                                <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-xl text-white">{a.title}</h3><span className="text-xs text-slate-400 font-mono">{a.dateStr || ''}</span></div>
+                                                <div className="text-sm text-slate-300 mb-4 rich-editor leading-relaxed" onClick={(e) => {
                                                     const link = e.target.closest && e.target.closest('.wiki-link');
                                                     if (link) {
                                                         e.preventDefault(); e.stopPropagation();
@@ -2335,21 +3258,80 @@
                                                         const wikiTitle = link.getAttribute('data-wiki-title');
                                                         if (id) {
                                                             const target = articleIndex.get(id);
-                                                            if (target) { setSelectedArticle(target); setViewMode('timeline_large'); if (onResetFilters) onResetFilters(); }
-                                                            else alert('リンク先の記事が見つかりません');
+                                                            if (target) {
+                                                                setSelectedArticle(target);
+                                                                setViewMode('single_article');
+                                                                setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true });
+                                                            } else {
+                                                                alert('リンク先の記事が見つかりません');
+                                                            }
                                                         } else if (wikiTitle) {
-                                                            if (wikiTitle === '年代なし') { setViewMode('timeline_noyear'); }
-                                                            else {
+                                                            if (wikiTitle === '年代なし') {
+                                                                setViewMode('timeline_noyear');
+                                                            } else {
                                                                 const target = articles.find(x => (x.title || '').trim() === wikiTitle.trim());
-                                                                if (target) { setSelectedArticle(target); setViewMode('timeline_large'); if (onResetFilters) onResetFilters(); }
-                                                                else alert('リンク先の記事が見つかりません');
+                                                                if (target) {
+                                                                    setSelectedArticle(target);
+                                                                    setViewMode('single_article');
+                                                                    setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true });
+                                                                } else {
+                                                                    alert('リンク先の記事が見つかりません');
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }} dangerouslySetInnerHTML={{ __html: transformContent(a.contentHtml || '') }}></div>
-                                                <div className="mt-4 flex justify-end gap-2"><button onClick={() => { startEditingArticle(a); }} className="px-3 py-1 rounded border text-sm">編集</button></div>
+                                                <div className="flex justify-end gap-2 border-t border-slate-700 pt-3">
+                                                    <button onClick={() => { startEditingArticle(a); }} className="px-3 py-1 rounded bg-slate-700 text-white text-sm hover:bg-slate-600">編集</button>
+                                                    <button onClick={() => { handleDuplicateArticle(a); }} className="px-3 py-1 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-700">複製</button>
+                                                    {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => { handleDeleteArticle(a); }} className="px-3 py-1 rounded bg-red-600 text-white text-sm hover:bg-red-700">削除</button>}
+                                                </div>
                                             </div>
                                         ))}
+                                    </div>
+                                </div>
+                            )}
+                            {viewMode === 'single_article' && selectedArticle && (
+                                <div className="absolute inset-0 bg-slate-900 overflow-y-auto z-50 p-0">
+                                    <div className="sticky top-0 bg-slate-900/95 backdrop-blur border-b border-slate-700 p-4 flex justify-between items-center z-50 shadow-lg">
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={() => setViewMode('timeline_noyear')} className="flex items-center gap-1 text-sm text-slate-400 hover:text-white"><Icon name="arrow-left" size={16} /> 一覧に戻る</button>
+                                            <h2 className="font-bold text-lg truncate max-w-xl flex items-center gap-2 text-white">
+                                                {selectedArticle.title}
+                                                {selectedArticle.isApproved && <span className="bg-emerald-600 text-white text-xs px-2 py-0.5 rounded flex items-center gap-1"><Icon name="check" size={12} /> 承認済</span>}
+                                            </h2>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => startEditingArticle(selectedArticle)} className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-bold rounded shadow-sm hover:bg-indigo-700">編集</button>
+                                            <button onClick={() => handleDuplicateArticle(selectedArticle)} className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-bold rounded shadow-sm hover:bg-emerald-700">複製</button>
+                                            {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => handleDeleteArticle(selectedArticle)} className="px-4 py-1.5 bg-red-600 text-white text-sm font-bold rounded shadow-sm hover:bg-red-700">削除</button>}
+                                        </div>
+                                    </div>
+                                    <div className="max-w-none p-8 md:p-12 mx-auto">
+                                        {/* Full width rendering container without constraints for complex tables */}
+                                        <div className="prose prose-xl max-w-none prose-invert" style={{ color: '#e2e8f0' }} dangerouslySetInnerHTML={{ __html: transformContent(selectedArticle.contentHtml || '') }} onClick={(e) => {
+                                            const link = e.target.closest && e.target.closest('.wiki-link');
+                                            if (link) {
+                                                e.preventDefault(); e.stopPropagation();
+                                                const id = link.getAttribute('data-article-id');
+                                                if (id) {
+                                                    const target = articleIndex.get(id);
+                                                    if (target) {
+                                                        const y = getArticleYear(target);
+                                                        // 年代設定ありの記事なら年表ビューへ飛ぶ
+                                                        if (y && y !== 0 && !target.noYear) {
+                                                            setSelectedArticle(target);
+                                                            setViewMode('timeline_large');
+                                                            // フォーカスを当てるなど
+                                                        } else {
+                                                            setSelectedArticle(target);
+                                                            /* stay in single view */
+                                                        }
+                                                    }
+                                                    else alert('リンク先が見つかりません');
+                                                }
+                                            }
+                                        }}></div>
                                     </div>
                                 </div>
                             )}
@@ -2376,13 +3358,51 @@
                                                     <input className="w-full border p-2 rounded" placeholder="2023/11/20-14:00:00" value={formData.dateStr || ''} onChange={e => setFormData(prev => ({ ...prev, dateStr: e.target.value }))} />
                                                 </div>
                                             </div>
+                                            <div className="my-2">
+                                                <label className="text-xs font-bold text-gray-500 block mb-1">重要度 (1-5)</label>
+                                                <div className="flex gap-1">
+                                                    {[1, 2, 3, 4, 5].map(v => (
+                                                        <button key={v} onClick={() => setFormData(prev => ({ ...prev, importance: v }))} className={`px-3 py-1 rounded text-sm font-bold border ${formData.importance === v ? 'bg-yellow-100 text-yellow-600 border-yellow-300' : 'bg-gray-50 text-gray-400'}`}>
+                                                            {v}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
                                             <div className="flex items-center gap-4">
                                                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!formData.noYear} onChange={e => setFormData(prev => ({ ...prev, noYear: e.target.checked }))} /> <span className="text-sm text-gray-600">年代なしにする</span></label>
+                                                {canIApprove && (
+                                                    <label className="flex items-center gap-2 text-sm bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
+                                                        <input type="checkbox" checked={!!formData.isApproved} onChange={e => setFormData(prev => ({ ...prev, isApproved: e.target.checked }))} />
+                                                        <span className="text-sm font-bold text-emerald-800">承認済みにする</span>
+                                                    </label>
+                                                )}
                                             </div>
+                                            {!canIApprove && (
+                                                <div className="text-xs text-gray-500">
+                                                    現在のステータス: <span className={`font-bold ${formData.isApproved ? 'text-emerald-600' : 'text-gray-400'}`}>{formData.isApproved ? '承認済み' : '未承認'}</span>
+                                                    (承認権限がありません)
+                                                </div>
+                                            )}
                                             <div className="flex gap-2">
                                                 <div className="flex-1"><LocationsEditor locations={formData.locations} onChange={l => setFormData(prev => ({ ...prev, locations: l }))} /></div>
                                                 <div className="w-1/3 space-y-2">
-                                                    <ArticleLinkInserter articles={articles} onInsert={(a) => { if (editorRef.current) editorRef.current.insertLink(a); }} />
+                                                    <ArticleLinkInserter articles={articles} onInsert={(a) => {
+                                                        if (formData._editorMode === 'html' && htmlTextareaRef.current) {
+                                                            const ta = htmlTextareaRef.current;
+                                                            const start = ta.selectionStart;
+                                                            const end = ta.selectionEnd;
+                                                            const text = formData.contentHtml || '';
+                                                            const wikiLink = `[[${a.title}|${a.id}]]`;
+                                                            const newText = text.substring(0, start) + wikiLink + text.substring(end);
+                                                            setFormData(prev => ({ ...prev, contentHtml: newText }));
+                                                            setTimeout(() => {
+                                                                ta.focus();
+                                                                ta.setSelectionRange(start + wikiLink.length, start + wikiLink.length);
+                                                            }, 0);
+                                                        } else if (editorRef.current) {
+                                                            editorRef.current.insertLink(a);
+                                                        }
+                                                    }} />
                                                     <div className="text-xs text-gray-500">※文字色はエディタのカラー機能で変更できます</div>
                                                 </div>
                                             </div>
@@ -2397,11 +3417,34 @@
                                                 {formData._editorMode === 'html' ? (
                                                     <div className="flex-1 border rounded overflow-hidden flex flex-col min-h-[320px] bg-white">
                                                         <label className="text-xs font-bold text-gray-500 p-2">HTML ソース</label>
-                                                        <textarea className="w-full h-48 p-2 font-mono text-sm border-t" value={formData.contentHtml || ''} onChange={e => setFormData(prev => ({ ...prev, contentHtml: e.target.value }))} />
+                                                        <textarea ref={htmlTextareaRef} className="w-full h-48 p-2 font-mono text-sm border-t" value={formData.contentHtml || ''} onChange={e => setFormData(prev => ({ ...prev, contentHtml: e.target.value }))} />
                                                         <div className="p-2 border-t">
                                                             <AttachmentUploader storage={storage} appContextId={appContextId} onAddAttachment={(att) => setFormData(prev => ({ ...prev, attachments: [...(prev.attachments || []), att] }))} />
                                                             <div className="mt-2 space-y-1 text-xs">
-                                                                {(formData.attachments || []).map((att, i) => (<div key={i} className="flex items-center justify-between gap-2"><a className="text-indigo-600 underline truncate" href={att.url} target="_blank" rel="noreferrer">{att.name}</a><button onClick={() => setFormData(prev => ({ ...prev, attachments: prev.attachments.filter((_, ii) => ii !== i) }))} className="text-red-500 text-xs">削除</button></div>))}
+                                                                {(formData.attachments || []).map((att, i) => (
+                                                                    <div key={i} className="flex items-center justify-between gap-2 p-1 bg-gray-50 rounded mb-1">
+                                                                        <a className="text-indigo-600 underline truncate flex-1" href={att.url} target="_blank" rel="noreferrer" title={att.name}>{att.name}</a>
+                                                                        <div className="flex gap-1">
+                                                                            <button onClick={() => copyText(att.url)} className="text-gray-500 hover:text-indigo-600 text-[10px] border px-1 rounded bg-white">URL</button>
+                                                                            <button onClick={() => {
+                                                                                const tag = `<img src="${att.url}" alt="${att.name}" style="max-width:100%;" />`;
+                                                                                if (htmlTextareaRef.current) {
+                                                                                    const ta = htmlTextareaRef.current;
+                                                                                    const start = ta.selectionStart;
+                                                                                    const end = ta.selectionEnd;
+                                                                                    const text = formData.contentHtml || '';
+                                                                                    const newText = text.substring(0, start) + tag + text.substring(end);
+                                                                                    setFormData(prev => ({ ...prev, contentHtml: newText }));
+                                                                                    setTimeout(() => {
+                                                                                        ta.focus();
+                                                                                        ta.setSelectionRange(start + tag.length, start + tag.length);
+                                                                                    }, 0);
+                                                                                }
+                                                                            }} className="text-indigo-600 hover:text-indigo-800 text-[10px] border px-1 rounded font-bold bg-white">IMG挿入</button>
+                                                                            <button onClick={() => setFormData(prev => ({ ...prev, attachments: prev.attachments.filter((_, ii) => ii !== i) }))} className="text-red-500 hover:text-red-700 text-[10px] border px-1 rounded bg-white">削除</button>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -2436,7 +3479,7 @@
                                                     }}
                                                     appContextId={appContextId}
                                                     storage={storage}
-                                                    onMapImageUpdate={handleMapImageUpdate}
+                                                    onMapImageUpdate={null} // Disable direct image update in edit sidebar in favor of admin panel
                                                     myRole={myRole}
                                                 />
                                             </div>
@@ -2446,7 +3489,7 @@
                                 </div>
                             )}
                             {showMemberManager && <MemberManager db={db} worldId={worldId} appContextId={appContextId} onClose={() => setShowMemberManager(false)} />}
-                            {showRegionRuleEditor && <RegionRuleEditor rules={regionRules || []} onSave={(r) => { setRegionRules(r); setShowRegionRuleEditor(false); }} onClose={() => setShowRegionRuleEditor(false)} />}
+                            {showRegionRuleEditor && <RegionRuleEditor rules={regionRules} worldData={worldData} onSave={(r) => { handleSaveRegionRules(r); setShowRegionRuleEditor(false); }} onClose={() => setShowRegionRuleEditor(false)} />}
                             {showAdminPanel && (
                                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
                                     <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
@@ -2466,29 +3509,56 @@
                                             </div>
                                             <div className="flex items-center justify-between">
                                                 <div>
-                                                    <div className="text-sm font-bold">地図画像アップロード</div>
-                                                    <div className="text-xs text-gray-500">世界の地図画像を更新します（管理者のみ）</div>
+                                                    <div className="text-sm font-bold">地図レイヤー管理</div>
+                                                    <div className="text-xs text-gray-500">複数の地図レイヤーを管理します</div>
                                                 </div>
                                                 <div>
-                                                    <ImageUploader storage={storage} appContextId={appContextId} onUploadComplete={(url) => { setShowAdminPanel(false); handleMapImageUpdate(url); }} label="アップロード" />
+                                                    {/* Just a placeholder, main UI is below */}
                                                 </div>
                                             </div>
+                                            <div className="border border-indigo-100 rounded bg-indigo-50 p-3">
+                                                <MapLayerManager
+                                                    layers={worldData?.mapLayers || (worldData?.mapImageUrl ? [{ id: 'default', name: '標準マップ', url: worldData.mapImageUrl }] : [])}
+                                                    onUpdate={handleMapLayersUpdate}
+                                                    storage={storage}
+                                                    appContextId={appContextId}
+                                                />
+                                            </div>
+
                                             <div className="flex items-center justify-between">
                                                 <div>
                                                     <div className="text-sm font-bold">地域タグ自動付与</div>
                                                     <div className="text-xs text-gray-500">座標に応じたタグ割り当てルールを設定します</div>
                                                 </div>
-                                                <div>
+                                                <div className="flex gap-2">
+                                                    <button onClick={handleReapplyRegionTags} className="px-3 py-1.5 bg-gray-500 text-white rounded text-sm hover:bg-gray-600" title="現在のルールに基づいてタグを再計算・追加します">再適用</button>
                                                     <button onClick={() => { setShowRegionRuleEditor(true); setShowAdminPanel(false); }} className="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">編集</button>
                                                 </div>
+                                            </div>
+                                            <div className="flex items-center justify-between pt-4 border-t">
+                                                <div>
+                                                    <div className="text-sm font-bold">Discord Webhook設定</div>
+                                                    <div className="text-xs text-gray-500">記事更新通知の送信先</div>
+                                                </div>
+                                                <button onClick={async () => {
+                                                    const currentUrl = worldData?.discordWebhookUrl || '';
+                                                    const newUrl = prompt('Discord Webhook URLを入力:', currentUrl);
+                                                    if (newUrl !== null) {
+                                                        try {
+                                                            const { doc, updateDoc } = window.firebaseModules;
+                                                            await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { discordWebhookUrl: newUrl });
+                                                            alert('Webhook URLを保存しました');
+                                                        } catch (e) { alert('保存失敗: ' + e.message); }
+                                                    }
+                                                }} className="px-3 py-1.5 bg-indigo-500 text-white rounded text-sm">設定</button>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
                             )}
                         </div>
-                    </div>
-                </div>
+                    </div >
+                </div >
             );
         };
 

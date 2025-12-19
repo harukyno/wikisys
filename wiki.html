@@ -606,16 +606,29 @@
                         return;
                     }
 
-                    const data = filtered.map(a => [a.title, a.year || 0, a.importance || 3]);
+
+                    const wikiLinkRenderer = (instance, td, col, row, index, val) => {
+                        // タイトル列の場合、IDとのペアが来ていると理想的だが、ここでは名前解決に頼るか、
+                        // もしくはデータソース自体を [[Title|ID]] にしておく。
+                        // filtered から ID を引くのはソート順の管理が難しいので、単純なテキスト変換を行う。
+                        // ただし、名前解決のリスク（同名記事）があるため、可能ならIDを埋め込みたい。
+                        // 以下の columns 定義で data を工夫する。
+
+                        td.innerHTML = parsePukiWikiSyntax ? parsePukiWikiSyntax(val) : val;
+                    };
+
+                    const data = filtered.map(a => [`[[${a.title}|${a.id}]]`, a.year || 0, a.importance || 3]);
                     jspreadsheet(el, {
                         data: data,
                         columns: [
-                            { type: 'text', title: 'タイトル', width: 250, readOnly: true },
+                            { type: 'text', title: 'タイトル', width: 250, readOnly: true, renderer: wikiLinkRenderer },
                             { type: 'numeric', title: '年代', width: 80, readOnly: true },
                             { type: 'numeric', title: '重要度', width: 60, readOnly: true },
                         ],
                         search: true,
                         pagination: 10,
+                        allowInsertRow: false,
+                        allowDeleteRow: false,
                     });
                 }, 100);
 
@@ -643,6 +656,8 @@
                 .replace(/\r/g, '') // Normalize newlines
                 .replace(/<br\s*\/?>/gi, '&br;')
                 .replace(/<\/p>/gi, '\n')
+                .replace(/<\/p>/gi, '\n')
+                .replace(/<div>/gi, '\n') // div start -> newline
                 .replace(/<\/div>/gi, '\n')
                 .replace(/<\/tr>/gi, '\n')
                 .replace(/<\/li>/gi, '\n');
@@ -1899,6 +1914,7 @@
                 });
             }, [filteredArticles, highlightArticleId, showControls]);
 
+
             React.useEffect(() => {
                 const updateMapSize = () => { if (leafletMap.current) leafletMap.current.invalidateSize(); };
                 const resizeObserver = new ResizeObserver(updateMapSize);
@@ -2810,6 +2826,50 @@
 
                 return () => clearTimeout(timeoutId);
             }, [viewMode, selectedArticle, worldId, user]);
+
+            // Global Wiki Link Click Handler
+            React.useEffect(() => {
+                const handleGlobalClick = (e) => {
+                    const link = e.target.closest('.wiki-link');
+                    if (link) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const id = link.getAttribute('data-article-id');
+                        const wikiTitle = link.getAttribute('data-wiki-title');
+
+                        if (id) {
+                            const target = articles.find(a => a.id === id);
+                            if (target) openDetailView(target);
+                            else alert('記事が見つかりません');
+                        } else if (wikiTitle) {
+                            if (wikiTitle === '年代なし') {
+                                setViewMode('timeline_noyear');
+                            } else {
+                                const target = articles.find(a => (a.title || '').trim() === wikiTitle.trim());
+                                if (target) openDetailView(target);
+                                else alert('記事が見つかりません');
+                            }
+                        }
+                    }
+                };
+                document.addEventListener('click', handleGlobalClick);
+                return () => document.removeEventListener('click', handleGlobalClick);
+            }, [articles]);
+
+            // Expose openArticleById globally
+            React.useEffect(() => {
+                window.openArticleById = (idOrTitle) => {
+                    if (!idOrTitle) return;
+                    const target = articles.find(a => a.id === idOrTitle) || articles.find(a => (a.title || '').trim() === idOrTitle.trim());
+                    if (target) {
+                        openDetailView(target);
+                    } else if (idOrTitle === '年代なし') {
+                        setViewMode('timeline_noyear');
+                    } else {
+                        alert('記事が見つかりません: ' + idOrTitle);
+                    }
+                };
+            }, [articles]);
 
             // ブラウザの戻る/進むボタンに対応
             React.useEffect(() => {
