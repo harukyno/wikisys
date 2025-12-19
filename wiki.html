@@ -145,23 +145,33 @@
             background: #aaa;
         }
 
-        /* CSV block table styling: 罫線付きで表示 */
-        .csv-block table {
+        /* テーブルの基本スタイル（記事表示用） */
+        .prose table {
             border-collapse: collapse;
             width: 100%;
+            margin: 1rem 0;
             border: 1px solid #444;
+            background-color: rgba(255, 255, 255, 0.05);
         }
 
-        .csv-block th,
-        .csv-block td {
+        .prose th,
+        .prose td {
             border: 1px solid #444;
-            padding: 6px;
+            padding: 8px;
+            text-align: left;
         }
 
-        .csv-block table,
-        .csv-block th,
-        .csv-block td {
-            border-color: #444;
+        .prose th {
+            background-color: rgba(255, 255, 255, 0.1);
+            font-weight: bold;
+        }
+
+        /* ダークモード環境用（.prose-invertなど） */
+        .prose-invert table,
+        .prose-invert th,
+        .prose-invert td {
+            border-color: #475569;
+            /* slate-600 */
         }
 
         /* Placeholder style when table HTML is omitted from editor content */

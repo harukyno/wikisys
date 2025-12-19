@@ -23,9 +23,9 @@
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
 
-    <!-- Quill.js -->
-    <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-    <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
+    <!-- Quill.js 2.0.2 -->
+    <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
 
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -145,23 +145,37 @@
             background: #aaa;
         }
 
-        /* CSV block table styling: 罫線付きで表示 */
-        .csv-block table {
+        /* テーブルの基本スタイル（記事表示用） */
+        .rich-editor table,
+        .prose table {
             border-collapse: collapse;
             width: 100%;
+            margin: 1rem 0;
             border: 1px solid #444;
+            background-color: rgba(255, 255, 255, 0.05);
         }
 
-        .csv-block th,
-        .csv-block td {
+        .rich-editor th,
+        .rich-editor td,
+        .prose th,
+        .prose td {
             border: 1px solid #444;
-            padding: 6px;
+            padding: 8px;
+            text-align: left;
         }
 
-        .csv-block table,
-        .csv-block th,
-        .csv-block td {
-            border-color: #444;
+        .rich-editor th,
+        .prose th {
+            background-color: rgba(255, 255, 255, 0.1);
+            font-weight: bold;
+        }
+
+        /* ダークモード環境用（.prose-invertなど） */
+        .prose-invert table,
+        .prose-invert th,
+        .prose-invert td {
+            border-color: #475569;
+            /* slate-600 */
         }
 
         /* Placeholder style when table HTML is omitted from editor content */
@@ -1181,60 +1195,33 @@
                         // 独自記法 [[Title|ID]] を挿入
                         quillRef.current.insertText(cursor ? cursor.index : 0, `[[${article.title}|${article.id}]]`);
                     }
-                }
-                , insertTable: (rows = 3, cols = 2) => {
+                },
+                insertTable: (rows = 3, cols = 3) => {
                     if (quillRef.current) {
-                        const cursor = quillRef.current.getSelection(true);
-                        // Build a simple CSV representation instead of inserting raw <table> HTML
-                        const rowsArr = [];
-                        for (let r = 0; r < rows; r++) {
-                            const row = [];
-                            for (let c = 0; c < cols; c++) row.push(r === 0 ? ('ヘッダ' + (c + 1)) : '');
-                            rowsArr.push(row);
-                        }
-                        const csvText = rowsArr.map(r => r.map(cell => String(cell).includes(',') ? `"${String(cell).replace(/"/g, '""')}"` : cell).join(',')).join('\n');
-                        const encoded = encodeURIComponent(csvText);
-                        const placeholder = `<div class="csv-block" data-csv="${encoded}"><div class="csv-placeholder">表 (${rows}行×${cols}列) - クリックで編集</div></div><p></p>`;
-                        try { quillRef.current.clipboard.dangerouslyPasteHTML(cursor ? cursor.index : 0, placeholder); } catch (e) {
-                            try { const editorRoot = containerRef.current.querySelector('.ql-editor'); if (editorRoot) editorRoot.insertAdjacentHTML('beforeend', placeholder); }
-                            catch (err) { console.error(err); }
+                        const table = quillRef.current.getModule('table');
+                        if (table) {
+                            table.insertTable(rows, cols);
                         }
                     }
-                }
-                , insertCSV: (csvText) => {
-                    if (!csvText) return;
+                },
+                insertCSV: (csvText) => {
+                    if (!csvText || !quillRef.current) return;
                     const rows = parseCSV(csvText, ',');
                     if (!rows || rows.length === 0) return;
-                    const useHeader = window.confirm('CSVの1行目をヘッダとして使いますか？ (はい=ヘッダ)');
-                    // wrap CSV data into a csv-block div so the raw CSV is preserved in data-csv
-                    const encoded = encodeURIComponent(csvText);
-                    let tableHtml = '<table class="inserted-table" border="1" style="border-collapse:collapse;width:100%"><tbody>';
-                    rows.forEach((r, ri) => {
+
+                    // CSVデータを標準的なHTMLテーブルに変換して挿入
+                    let tableHtml = '<table style="width:100%; border-collapse:collapse; border:1px solid #ccc;"><tbody>';
+                    rows.forEach((r) => {
                         tableHtml += '<tr>';
-                        r.forEach((cell, ci) => {
-                            const tag = (useHeader && ri === 0) ? 'th' : 'td';
-                            tableHtml += `<${tag} style="padding:6px">${cell || '&nbsp;'}</${tag}>`;
+                        r.forEach((cell) => {
+                            tableHtml += `<td style="border:1px solid #ccc; padding:8px;">${cell || '&nbsp;'}</td>`;
                         });
                         tableHtml += '</tr>';
                     });
-                    tableHtml += '</tbody></table>';
-                    const wrapper = `<div class="csv-block" data-csv="${encoded}">${tableHtml}</div><p></p>`;
-                    try {
-                        // Try to paste at cursor (may be sanitized by Quill in some configs)
-                        const cursor = quillRef.current.getSelection(true);
-                        quillRef.current.clipboard.dangerouslyPasteHTML(cursor ? cursor.index : 0, wrapper);
-                        // verify insertion: if no csv-block present after paste, fallback to append
-                        const editorRoot = containerRef.current.querySelector('.ql-editor');
-                        if (editorRoot && !editorRoot.querySelector('.csv-block')) {
-                            // fallback: append to end
-                            editorRoot.insertAdjacentHTML('beforeend', wrapper);
-                        }
-                    } catch (e) {
-                        try {
-                            const editorRoot = containerRef.current.querySelector('.ql-editor');
-                            if (editorRoot) editorRoot.insertAdjacentHTML('beforeend', wrapper);
-                        } catch (err) { console.error(err); }
-                    }
+                    tableHtml += '</tbody></table><p><br></p>';
+
+                    const cursor = quillRef.current.getSelection(true);
+                    quillRef.current.clipboard.dangerouslyPasteHTML(cursor ? cursor.index : 0, tableHtml);
                 }
             }));
 
@@ -1244,9 +1231,12 @@
                         console.error('Quill is not defined');
                         return;
                     }
+
+                    // Quill 2.0 ではテーブルモジュールが標準搭載されている
                     const quill = new Quill(containerRef.current, {
                         theme: 'snow',
                         modules: {
+                            table: true, // テーブルモジュールを有効化
                             toolbar: [
                                 [{ 'header': [1, 2, 3, false] }],
                                 ['bold', 'italic', 'underline', 'strike'],
@@ -1254,65 +1244,58 @@
                                 [{ 'list': 'ordered' }, { 'list': 'bullet' }],
                                 [{ 'align': [] }],
                                 ['link', 'image', 'blockquote', 'code-block'],
+                                [{ 'table': [] }], // テーブル挿入・操作ボタンを追加
                                 ['clean']
                             ]
                         }
                     });
 
                     quill.on('text-change', () => {
-                        const html = containerRef.current.querySelector('.ql-editor').innerHTML;
+                        const html = quill.root.innerHTML;
                         onChange(html);
                     });
 
                     quillRef.current = quill;
-                    // クリックで csv-block を編集するハンドラ
-                    const editorRoot = containerRef.current;
-                    const onClick = (e) => {
-                        const csvEl = e.target.closest && e.target.closest('.csv-block');
-                        if (csvEl) {
-                            e.preventDefault();
-                            const raw = csvEl.getAttribute('data-csv') || '';
-                            const decoded = raw ? decodeURIComponent(raw) : '';
-                            const newCsv = window.prompt('CSV を編集してください（カンマ区切り）。\nヘッダを含める場合は1行目にヘッダを入れてください。', decoded);
-                            if (newCsv !== null) {
-                                const rows = parseCSV(newCsv, ',');
-                                // update data-csv but keep placeholder-only inner content (no raw table HTML)
-                                csvEl.setAttribute('data-csv', encodeURIComponent(newCsv));
-                                const rCount = rows.length; const cCount = rows[0] ? rows[0].length : 0;
-                                csvEl.innerHTML = `<div class="csv-placeholder">表 (${rCount}行×${cCount}列) - クリックで編集</div>`;
-                                // notify change to parent via onChange
-                                try { const html = containerRef.current.querySelector('.ql-editor').innerHTML; onChange && onChange(html); } catch (e) { console.error(e); }
-                            }
-                        }
-                    };
-                    editorRoot.addEventListener('click', onClick);
-                    // cleanup on unmount
-                    const cleanup = () => editorRoot.removeEventListener('click', onClick);
-                    // attach cleanup to quillRef for potential future removal
-                    quillRef.current.__cleanupCsvHandler = cleanup;
-                }
-            }, []);
 
-            React.useEffect(() => {
-                return () => {
-                    if (quillRef.current && quillRef.current.__cleanupCsvHandler) {
-                        try { quillRef.current.__cleanupCsvHandler(); } catch (e) { }
-                    }
-                };
+                    // テーブル操作用のコンテキストメニュー的な補助（Quill 2.0のUIに任せるが、必要ならここで追加可能）
+                }
             }, []);
 
             // 初期値設定
             React.useEffect(() => {
                 if (quillRef.current && value !== quillRef.current.root.innerHTML) {
                     if (!quillRef.current.hasFocus()) {
+                        // 既存のHTMLをセット
                         quillRef.current.root.innerHTML = value || '';
                     }
                 }
             }, [value]);
 
             return (
-                <div className="h-full flex flex-col bg-white rounded">
-                    <div ref={containerRef} className="flex-1 overflow-hidden min-h-[280px]" style={{ height: '100%' }}></div>
+                <div className="h-full flex flex-col bg-white rounded rich-editor-container">
+                    <style dangerouslySetInnerHTML={{
+                        __html: `
+                        .rich-editor-container .ql-editor table {
+                            border-collapse: collapse;
+                            width: 100%;
+                            margin: 10px 0;
+                        }
+                        .rich-editor-container .ql-editor td, 
+                        .rich-editor-container .ql-editor th {
+                            border: 1px solid #ccc;
+                            padding: 8px;
+                            min-width: 20px;
+                        }
+                        /* Quill 2.0 Table UI Customization */
+                        .ql-table-controls {
+                            padding: 5px;
+                            background: #f8f9fa;
+                            border: 1px solid #ddd;
+                            display: flex;
+                            gap: 5px;
+                        }
+                    `}} />
+                    <div ref={containerRef} className="flex-1 overflow-visible min-h-[400px]"></div>
                 </div>
             );
         });
