@@ -33,6 +33,12 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=Shippori+Mincho:wght@400;600&display=swap"
         rel="stylesheet">
+    <!-- JSpreadsheet (Excel-like Grid) -->
+    <script src="https://cdn.jsdelivr.net/npm/jspreadsheet-ce@4.13.1/dist/index.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jspreadsheet-ce@4.13.1/dist/jspreadsheet.min.css"
+        type="text/css" />
+    <script src="https://cdn.jsdelivr.net/npm/jsuites/dist/jsuites.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsuites/dist/jsuites.min.css" type="text/css" />
 
     <!-- Firebase SDK -->
     <script type="module">
@@ -58,6 +64,22 @@
 
         .serif {
             font-family: 'Shippori Mincho', serif;
+        }
+
+        .googlesheet-container iframe {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* JSpreadsheet Custom Overrides */
+        .jexcel>thead>tr>td {
+            background-color: #f8fafc;
+            font-weight: bold;
+            color: #475569;
+        }
+
+        .jexcel>tbody>tr>td {
+            font-size: 13px;
         }
 
         /* その他のスタイル */
@@ -268,6 +290,7 @@
             ideology: { label: '思想・宗教', color: 'bg-emerald-100 text-emerald-800', icon: 'star' },
             item: { label: '物品', color: 'bg-amber-100 text-amber-800', icon: 'package' },
             story: { label: '物語', color: 'bg-pink-100 text-pink-800', icon: 'book-open' },
+            spreadsheet: { label: 'データ表', color: 'bg-cyan-100 text-cyan-800', icon: 'table-2' },
             other: { label: 'その他', color: 'bg-gray-100 text-gray-800', icon: 'box' }
         };
 
@@ -305,10 +328,10 @@
 
         // ビュー設定：構造年表（Large Timeline）をメインの年表として統合
         const VIEW_TABS = [
-            { key: 'list', label: '総記', icon: 'list' },
-            { key: 'story', label: '物語', icon: 'book' },
+            { key: 'list', label: '一覧', icon: 'list' },
             { key: 'map', label: '地図', icon: 'map' },
             { key: 'timeline_large', label: '構造年表', icon: 'git-branch' },
+            { key: 'spreadsheet', label: 'データ', icon: 'table-2' },
             { key: 'stats', label: '統計', icon: 'bar-chart-2' }
         ];
 
@@ -484,7 +507,6 @@
             return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
         };
 
-        // Decide region tags based on location points and REGION_TAG_RULES
         const computeRegionTags = (locations = [], rules = REGION_TAG_RULES_DEFAULT) => {
             const tags = new Set();
             if (!Array.isArray(locations) || locations.length === 0) return [];
@@ -562,6 +584,83 @@
             if (name === 'contents') return '';
             if (name === 'fold') return `<details><summary class="cursor-pointer font-bold text-indigo-600">${args || '詳細'}</summary><div class="pl-4 border-l-2 ml-1 mt-1">${parsePukiWikiSyntax ? parsePukiWikiSyntax(content) : content}</div></details>`;
             if (name === 'comment') return '<div class="text-xs text-gray-400 p-2 border bg-gray-50 my-2">[コメント欄]</div>';
+            if (name === 'googlesheet') {
+                const url = argList[0] || '';
+                if (!url) return '<div class="p-4 bg-red-50 text-red-500 text-xs text-center">GoogleスプレッドシートのURLを指定してください</div>';
+
+                // URL互換性向上ロジック: さまざまな共有形式を埋め込み用(pubhtml)に変換
+                let embedUrl = url;
+                if (url.includes('docs.google.com/spreadsheets')) {
+                    // /edit, /view, /preview, /pub などが含まれる場合、すべて pubhtml?widget=true に統一
+                    embedUrl = url.replace(/\/(edit|view|preview|pub|htmlview)(.*)$/, '/pubhtml?widget=true&headers=false');
+                    // 既に pubhtml っぽいがパラメータがない場合も補完
+                    if (!embedUrl.includes('pubhtml')) {
+                        const mid = url.match(/\/d\/([^\/]+)/);
+                        if (mid) embedUrl = `https://docs.google.com/spreadsheets/d/${mid[1]}/pubhtml?widget=true&headers=false`;
+                    }
+                }
+
+                return `<div class="googlesheet-container my-4 border rounded overflow-hidden shadow-sm bg-white" style="height:500px">
+                    <iframe src="${embedUrl}" class="w-full h-full border-0"></iframe>
+                </div>`;
+            }
+            if (name === 'datatable') {
+                const folder = argList.find(a => a.startsWith('folder='))?.split('=')[1] || '';
+                const tag = argList.find(a => a.startsWith('tag='))?.split('=')[1] || '';
+                const id = 'dt-' + Math.random().toString(36).substr(2, 9);
+
+                // 動的に読み込むためのプレースホルダ
+                setTimeout(() => {
+                    const el = document.getElementById(id);
+                    if (!el || !window.articles) return;
+
+                    const filtered = window.articles.filter(a => {
+                        if (folder && a.folder !== folder) return false;
+                        if (tag && !(a.tags || []).includes(tag)) return false;
+                        return true;
+                    }).sort((a, b) => (a.year || 0) - (b.year || 0));
+
+                    if (filtered.length === 0) {
+                        el.innerHTML = '<div class="p-4 text-gray-400 text-xs italic">該当する記事が見つかりません。</div>';
+                        return;
+                    }
+
+                    const data = filtered.map(a => [a.id, a.title, a.year || 0, a.importance || 3]);
+                    jspreadsheet(el, {
+                        data: data,
+                        columns: [
+                            { type: 'text', title: 'ID', width: 60, readOnly: true },
+                            { type: 'text', title: 'タイトル', width: 200, readOnly: true },
+                            { type: 'numeric', title: '年代', width: 80 },
+                            { type: 'numeric', title: '重要度', width: 60 },
+                        ],
+                        onchange: async (instance, cell, col, row, val) => {
+                            const articleId = instance.jexcel.getValueFromCoords(0, row);
+                            const field = col === 2 ? 'year' : col === 3 ? 'importance' : null;
+                            if (field && articleId) {
+                                try {
+                                    const { doc, updateDoc } = window.firebaseModules;
+                                    const db = window.db;
+                                    const ctx = window.appContextId;
+                                    const w = window.worldId;
+                                    await updateDoc(doc(db, 'artifacts', ctx, 'public', 'data', 'worlds', w, 'articles', articleId), {
+                                        [field]: Number(val)
+                                    });
+                                } catch (e) { console.error(e); }
+                            }
+                        },
+                        search: true,
+                        pagination: 10,
+                    });
+                }, 100);
+
+                return `<div class="wiki-datatable my-6 p-2 bg-slate-50 border rounded-lg shadow-inner overflow-hidden">
+                    <div class="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <i data-lucide="database" class="w-3 h-3"></i> データベース自動集計: ${folder || tag || '全て'}
+                    </div>
+                    <div id="${id}" class="mt-2 text-sm"></div>
+                </div>`;
+            }
             return null;
         };
 
@@ -1280,6 +1379,12 @@
                         // 変更を親コンポーネントに通知
                         onChange(quill.root.innerHTML);
                     }
+                },
+                insertText: (text) => {
+                    if (quillRef.current) {
+                        const range = quillRef.current.getSelection(true);
+                        quillRef.current.insertText(range ? range.index : 0, text);
+                    }
                 }
             }));
 
@@ -1482,7 +1587,8 @@
             const [rows, setRows] = React.useState(3);
             const [cols, setCols] = React.useState(3);
             const [pasteArea, setPasteArea] = React.useState('');
-            const [showPaste, setShowPaste] = React.useState(false);
+            const [showPaste, setShowPaste] = React.useState('normal'); // 'normal', 'copy', 'live'
+            const [sheetUrl, setSheetUrl] = React.useState('');
 
             const handlePasteInsert = () => {
                 if (!pasteArea.trim()) return;
@@ -1497,12 +1603,15 @@
                         <label className="text-xs font-bold text-gray-500 flex items-center gap-1">
                             <Icon name="table" size={14} /> 表ブロック
                         </label>
-                        <button onClick={() => setShowPaste(!showPaste)} className="text-[10px] text-indigo-600 hover:underline">
-                            {showPaste ? '通常挿入' : '外部からコピペ'}
-                        </button>
+                        <div className="flex gap-2">
+                            <button onClick={() => setShowPaste('normal')} className={`text-[10px] ${showPaste === 'normal' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>通常</button>
+                            <button onClick={() => setShowPaste('copy')} className={`text-[10px] ${showPaste === 'copy' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>コピペ</button>
+                            <button onClick={() => setShowPaste('live')} className={`text-[10px] ${showPaste === 'live' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>ライブ同期</button>
+                            <button onClick={() => setShowPaste('data')} className={`text-[10px] ${showPaste === 'data' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>自動集計</button>
+                        </div>
                     </div>
 
-                    {!showPaste ? (
+                    {showPaste === 'normal' && (
                         /* 新規作成エリア */
                         <div className="space-y-2 pb-2 border-b border-gray-100">
                             <div className="flex gap-2 items-center">
@@ -1533,7 +1642,8 @@
                                 新しい表を挿入
                             </button>
                         </div>
-                    ) : (
+                    )}
+                    {showPaste === 'copy' && (
                         /* コピペエリア */
                         <div className="space-y-2 pb-2 border-b border-gray-100">
                             <div className="text-[10px] text-gray-400 ml-1">スプレッドシート等の範囲をここに貼り付け</div>
@@ -1549,6 +1659,62 @@
                             >
                                 表に変換して挿入
                             </button>
+                        </div>
+                    )}
+
+                    {showPaste === 'live' && (
+                        /* ライブラリ埋め込みエリア */
+                        <div className="space-y-2 pb-2 border-b border-gray-100">
+                            <div className="text-[10px] text-gray-400 ml-1">Googleスプレッドシートを同期表示</div>
+                            <input
+                                type="text"
+                                className="w-full border rounded p-1.5 text-[10px] focus:border-indigo-500 outline-none"
+                                placeholder="スプレッドシートのURLを貼り付け"
+                                value={sheetUrl}
+                                onChange={e => setSheetUrl(e.target.value)}
+                            />
+                            <button
+                                onClick={() => {
+                                    if (!sheetUrl) return;
+                                    onAction('insertEmbed', `#googlesheet(${sheetUrl})`);
+                                    setSheetUrl('');
+                                }}
+                                className="w-full bg-indigo-600 text-white hover:bg-indigo-700 py-1.5 rounded text-[11px] font-bold transition-all shadow-sm active:scale-95"
+                            >
+                                ライブ同期表を挿入
+                            </button>
+                            <div className="text-[9px] text-gray-400 p-1 bg-gray-50 rounded">
+                                ※シートの「ファイル」 &gt; 「共有」 &gt; 「ウェブに公開」で公開設定にする必要があります。
+                            </div>
+                        </div>
+                    )}
+
+                    {showPaste === 'data' && (
+                        /* 自動集計エリア */
+                        <div className="space-y-2 pb-2 border-b border-gray-100">
+                            <div className="text-[10px] text-gray-400 ml-1">他記事のデータを自動で表にする</div>
+                            <div className="space-y-1">
+                                <label className="text-[9px] text-gray-400 ml-1">絞り込むフォルダ名 (任意)</label>
+                                <input
+                                    type="text"
+                                    className="w-full border rounded p-1 text-[10px]"
+                                    placeholder="例: 人物"
+                                    id="dt-folder-input"
+                                />
+                            </div>
+                            <button
+                                onClick={() => {
+                                    const folder = document.getElementById('dt-folder-input').value;
+                                    const syntax = folder ? `#datatable(folder=${folder})` : `#datatable()`;
+                                    onAction('insertEmbed', syntax);
+                                }}
+                                className="w-full bg-cyan-600 text-white hover:bg-cyan-700 py-1.5 rounded text-[11px] font-bold transition-all shadow-sm active:scale-95"
+                            >
+                                データベース表を挿入
+                            </button>
+                            <div className="text-[9px] text-gray-400 px-1 leading-tight">
+                                ※挿入した表は閲覧画面で自動更新され、エディタ権限があればその場で一括編集できます。
+                            </div>
                         </div>
                     )}
 
@@ -2270,6 +2436,158 @@
                                 <div className="text-[10px] opacity-60 truncate mt-0.5">{ARTICLE_TYPES[r.type]?.label || 'その他'}</div>
                             </div>
                         ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Large Spreadsheet View (Database View) ---
+        const LargeSpreadsheetView = ({ articles, db, appContextId, worldId, filters }) => {
+            const containerRef = React.useRef(null);
+            const jexcelRef = React.useRef(null);
+
+            // フィルタリング
+            const filtered = articles.filter(a => {
+                if (filters.type !== 'all' && a.type !== filters.type) return false;
+                if (filters.tag && !((a.tags || []).includes(filters.tag) || a.representedTag === filters.tag)) return false;
+                if (filters.keyword) {
+                    const k = filters.keyword.toLowerCase();
+                    return a.title.toLowerCase().includes(k) || (a.folder || '').toLowerCase().includes(k);
+                }
+                return true;
+            }).sort((a, b) => (a.year || 0) - (b.year || 0));
+
+            const handleExport = () => {
+                if (jexcelRef.current) {
+                    jexcelRef.current.download('world_weaver_data.csv');
+                }
+            };
+
+            const handleBulkImport = async () => {
+                const input = prompt("スプレッドシート（Google Sheets等）からコピーしたデータをここに貼り付けてください。\n(フォーマット: タイトル\t種別\tフォルダ\t年代\t重要度)");
+                if (!input) return;
+
+                const rows = input.split('\n').filter(r => r.trim());
+                if (rows.length === 0) return;
+
+                const { addDoc, collection, serverTimestamp } = window.firebaseModules;
+                let count = 0;
+
+                try {
+                    for (const row of rows) {
+                        const cols = row.split('\t');
+                        if (cols.length < 1) continue;
+
+                        const title = cols[0].trim();
+                        if (!title) continue;
+
+                        const type = Object.keys(ARTICLE_TYPES).includes(cols[1]?.trim()) ? cols[1].trim() : 'other';
+                        const folder = cols[2]?.trim() || '未分類';
+                        const year = Number(cols[3]) || 0;
+                        const importance = Number(cols[4]) || 3;
+
+                        await addDoc(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles'), {
+                            ...createEmptyArticle(),
+                            title, type, folder, year, importance,
+                            createdAt: serverTimestamp(),
+                            updatedAt: serverTimestamp(),
+                            isApproved: true
+                        });
+                        count++;
+                    }
+                    alert(`${count}件の記事を一括追加しました。`);
+                } catch (e) {
+                    alert("インポート失敗: " + e.message);
+                }
+            };
+
+            React.useEffect(() => {
+                if (!containerRef.current) return;
+
+                const data = filtered.map(a => [
+                    a.id,
+                    a.title,
+                    a.type,
+                    a.folder,
+                    a.year || 0,
+                    a.importance || 3,
+                    (a.tags || []).join(', '),
+                    a.isApproved ? 'Yes' : 'No'
+                ]);
+
+                if (jexcelRef.current) {
+                    jexcelRef.current.destroy();
+                }
+
+                jexcelRef.current = jspreadsheet(containerRef.current, {
+                    data: data,
+                    columns: [
+                        { type: 'text', title: 'ID', width: 80, readOnly: true },
+                        { type: 'text', title: 'タイトル', width: 250 },
+                        { type: 'dropdown', title: '種別', width: 100, source: Object.keys(ARTICLE_TYPES) },
+                        { type: 'text', title: 'フォルダ', width: 120 },
+                        { type: 'numeric', title: '年代', width: 80 },
+                        { type: 'numeric', title: '重要度', width: 60 },
+                        { type: 'text', title: 'タグ', width: 200 },
+                        { type: 'checkbox', title: '承認', width: 60 },
+                    ],
+                    onchange: async (instance, cell, col, row, val) => {
+                        const articleId = jexcelRef.current.getValueFromCoords(0, row);
+                        const fields = ['id', 'title', 'type', 'folder', 'year', 'importance', 'tags', 'isApproved'];
+                        const field = fields[col];
+
+                        let finalValue = val;
+                        if (field === 'year' || field === 'importance') finalValue = Number(val);
+                        if (field === 'tags') finalValue = val.split(',').map(s => s.trim()).filter(Boolean);
+                        if (field === 'isApproved') finalValue = (val === true || val === '1' || val === 'Yes');
+
+                        if (field && field !== 'id') {
+                            try {
+                                const { doc, updateDoc } = window.firebaseModules;
+                                await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles', articleId), {
+                                    [field]: finalValue
+                                });
+                            } catch (e) {
+                                console.error("Update failed", e);
+                            }
+                        }
+                    },
+                    allowInsertRow: false,
+                    allowDeleteRow: false,
+                    csvHeaders: true,
+                    search: true,
+                    pagination: 20,
+                });
+            }, [filtered.length, db, appContextId, worldId]);
+
+            return (
+                <div className="p-4 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
+                    <div className="mb-4 flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <div className="flex items-center gap-4">
+                            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                <Icon name="table-2" className="text-indigo-600" /> 世界データ管理
+                            </h2>
+                            <span className="text-xs text-slate-500 font-medium px-2 py-1 bg-white rounded border border-slate-200">
+                                全 {filtered.length} 件表示中
+                            </span>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={handleBulkImport} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded shadow-sm flex items-center gap-1 transition-all active:scale-95">
+                                <Icon name="plus-square" size={14} /> 一括インポート
+                            </button>
+                            <button onClick={handleExport} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded shadow-sm flex items-center gap-1 transition-all active:scale-95">
+                                <Icon name="download" size={14} /> CSV保存
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-auto rounded-lg border border-slate-100 shadow-inner bg-slate-50/30 p-2">
+                        <div ref={containerRef}></div>
+                    </div>
+                    <div className="mt-3 p-3 bg-blue-50/50 rounded-lg border border-blue-100/50 flex items-start gap-2">
+                        <Icon name="info" size={16} className="text-blue-500 mt-0.5 shrink-0" />
+                        <div className="text-[11px] text-blue-700 leading-relaxed">
+                            <span className="font-bold">Googleスプレッドシート互換:</span> セルをコピー（Ctrl+C）して外部に貼り付けたり、外部のデータをインポートボタンから一括作成したりできます。編集内容はリアルタイムでデータベースに反映されます。
+                        </div>
                     </div>
                 </div>
             );
@@ -3577,6 +3895,14 @@
                 } catch (e) { alert("削除失敗: " + e.message); }
             };
 
+            // Expose state to window for plugins (like #datatable)
+            React.useEffect(() => {
+                window.articles = articles;
+                window.db = db;
+                window.appContextId = appContextId;
+                window.worldId = worldId;
+            }, [articles, db, appContextId, worldId]);
+
             const handleDuplicateArticle = (article) => {
                 if (!article) return;
                 if (!['owner', 'editor', 'admin'].includes(myRole)) { alert("作成権限がありません"); return; }
@@ -3754,6 +4080,7 @@
                                 onAddMember={handleAddMember}
                             />}
                             {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} />}
+                            {viewMode === 'spreadsheet' && <LargeSpreadsheetView articles={articles} db={db} appContextId={appContextId} worldId={worldId} filters={timelineFilters} />}
                             {viewMode === 'timeline_noyear' && (
                                 <div className="absolute inset-0 overflow-auto p-6 bg-slate-900">
                                     <div className="flex items-center justify-between mb-4">
@@ -3954,6 +4281,19 @@
                                                             }
                                                         }}
                                                         onAction={(action, payload) => {
+                                                            if (action === 'insertEmbed' && payload) {
+                                                                if (formData._editorMode === 'html' && htmlTextareaRef.current) {
+                                                                    const ta = htmlTextareaRef.current;
+                                                                    const start = ta.selectionStart;
+                                                                    const end = ta.selectionEnd;
+                                                                    const text = formData.contentHtml || '';
+                                                                    const newText = text.substring(0, start) + payload + text.substring(end);
+                                                                    setFormData(prev => ({ ...prev, contentHtml: newText }));
+                                                                } else if (editorRef.current) {
+                                                                    editorRef.current.insertText(payload);
+                                                                }
+                                                                return;
+                                                            }
                                                             if (action === 'insertFromText' && payload) {
                                                                 if (formData._editorMode === 'html' && htmlTextareaRef.current) {
                                                                     const ta = htmlTextareaRef.current;
