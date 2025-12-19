@@ -1163,7 +1163,11 @@
 
         // --- Rich Editor (Quill.js) ---
         // CSV パーサ（簡易実装、引用符と改行に対応）
-        const parseCSV = (text, delimiter = ',') => {
+        const parseCSV = (text, delimiter) => {
+            if (!text) return [];
+            // デリミタが指定されていない場合、タブが含まれていればTSV、そうでなければカンマとみなす（自動判定）
+            const activeDelimiter = delimiter || (text.includes('\t') ? '\t' : ',');
+
             const rows = [];
             let cur = '';
             let row = [];
@@ -1173,7 +1177,7 @@
                 if (ch === '"') {
                     if (inQuotes && text[i + 1] === '"') { cur += '"'; i++; }
                     else { inQuotes = !inQuotes; }
-                } else if (ch === delimiter && !inQuotes) {
+                } else if (ch === activeDelimiter && !inQuotes) {
                     row.push(cur); cur = '';
                 } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
                     if (ch === '\r' && text[i + 1] === '\n') { i++; }
@@ -1477,6 +1481,15 @@
         const TableInserter = ({ onInsert, onAction, isWysiwyg }) => {
             const [rows, setRows] = React.useState(3);
             const [cols, setCols] = React.useState(3);
+            const [pasteArea, setPasteArea] = React.useState('');
+            const [showPaste, setShowPaste] = React.useState(false);
+
+            const handlePasteInsert = () => {
+                if (!pasteArea.trim()) return;
+                onAction('insertFromText', pasteArea);
+                setPasteArea('');
+                setShowPaste(false);
+            };
 
             return (
                 <div className="space-y-3 bg-white border p-3 rounded shadow-sm">
@@ -1484,38 +1497,60 @@
                         <label className="text-xs font-bold text-gray-500 flex items-center gap-1">
                             <Icon name="table" size={14} /> 表ブロック
                         </label>
-                    </div>
-
-                    {/* 新規作成エリア */}
-                    <div className="space-y-2 pb-2 border-b border-gray-100">
-                        <div className="flex gap-2 items-center">
-                            <div className="flex-1">
-                                <label className="text-[10px] text-gray-400 block mb-0.5 ml-1">行数</label>
-                                <input
-                                    type="number" min="1" max="20"
-                                    className="w-full border p-1 text-sm rounded focus:border-indigo-500 outline-none"
-                                    value={rows}
-                                    onChange={e => setRows(parseInt(e.target.value) || 1)}
-                                />
-                            </div>
-                            <div className="text-gray-300 mt-5">×</div>
-                            <div className="flex-1">
-                                <label className="text-[10px] text-gray-400 block mb-0.5 ml-1">列数</label>
-                                <input
-                                    type="number" min="1" max="20"
-                                    className="w-full border p-1 text-sm rounded focus:border-indigo-500 outline-none"
-                                    value={cols}
-                                    onChange={e => setCols(parseInt(e.target.value) || 1)}
-                                />
-                            </div>
-                        </div>
-                        <button
-                            onClick={() => onInsert(rows, cols)}
-                            className="w-full bg-indigo-600 text-white hover:bg-indigo-700 py-1.5 rounded text-[11px] font-bold transition-all shadow-sm active:scale-95"
-                        >
-                            新しい表を挿入
+                        <button onClick={() => setShowPaste(!showPaste)} className="text-[10px] text-indigo-600 hover:underline">
+                            {showPaste ? '通常挿入' : '外部からコピペ'}
                         </button>
                     </div>
+
+                    {!showPaste ? (
+                        /* 新規作成エリア */
+                        <div className="space-y-2 pb-2 border-b border-gray-100">
+                            <div className="flex gap-2 items-center">
+                                <div className="flex-1">
+                                    <label className="text-[10px] text-gray-400 block mb-0.5 ml-1">行数</label>
+                                    <input
+                                        type="number" min="1" max="20"
+                                        className="w-full border p-1 text-sm rounded focus:border-indigo-500 outline-none"
+                                        value={rows}
+                                        onChange={e => setRows(parseInt(e.target.value) || 1)}
+                                    />
+                                </div>
+                                <div className="text-gray-300 mt-5">×</div>
+                                <div className="flex-1">
+                                    <label className="text-[10px] text-gray-400 block mb-0.5 ml-1">列数</label>
+                                    <input
+                                        type="number" min="1" max="20"
+                                        className="w-full border p-1 text-sm rounded focus:border-indigo-500 outline-none"
+                                        value={cols}
+                                        onChange={e => setCols(parseInt(e.target.value) || 1)}
+                                    />
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => onInsert(rows, cols)}
+                                className="w-full bg-indigo-600 text-white hover:bg-indigo-700 py-1.5 rounded text-[11px] font-bold transition-all shadow-sm active:scale-95"
+                            >
+                                新しい表を挿入
+                            </button>
+                        </div>
+                    ) : (
+                        /* コピペエリア */
+                        <div className="space-y-2 pb-2 border-b border-gray-100">
+                            <div className="text-[10px] text-gray-400 ml-1">スプレッドシート等の範囲をここに貼り付け</div>
+                            <textarea
+                                className="w-full h-20 border rounded p-1 text-[10px] focus:border-indigo-500 outline-none resize-none font-mono"
+                                placeholder="Col1   Col2   Col3..."
+                                value={pasteArea}
+                                onChange={e => setPasteArea(e.target.value)}
+                            ></textarea>
+                            <button
+                                onClick={handlePasteInsert}
+                                className="w-full bg-emerald-600 text-white hover:bg-emerald-700 py-1.5 rounded text-[11px] font-bold transition-all shadow-sm active:scale-95"
+                            >
+                                表に変換して挿入
+                            </button>
+                        </div>
+                    )}
 
                     {/* テーブル操作エリア (WYSIWYGモード時のみ表示またはHTMLモードでのテンプレート的な案内) */}
                     <div className="space-y-1">
@@ -3919,6 +3954,26 @@
                                                             }
                                                         }}
                                                         onAction={(action, payload) => {
+                                                            if (action === 'insertFromText' && payload) {
+                                                                if (formData._editorMode === 'html' && htmlTextareaRef.current) {
+                                                                    const ta = htmlTextareaRef.current;
+                                                                    const start = ta.selectionStart;
+                                                                    const text = formData.contentHtml || '';
+                                                                    const rows = parseCSV(payload);
+                                                                    let tableHtml = '<table style="width:100%; border-collapse:collapse; border:1px solid #ccc;"><tbody>';
+                                                                    rows.forEach(r => {
+                                                                        tableHtml += '<tr>';
+                                                                        r.forEach(c => { tableHtml += `<td style="border:1px solid #ccc; padding:8px;">${c || '&nbsp;'}</td>`; });
+                                                                        tableHtml += '</tr>';
+                                                                    });
+                                                                    tableHtml += '</tbody></table><p><br></p>';
+                                                                    const newText = text.substring(0, start) + tableHtml + text.substring(start);
+                                                                    setFormData(prev => ({ ...prev, contentHtml: newText }));
+                                                                } else if (editorRef.current) {
+                                                                    editorRef.current.insertCSV(payload);
+                                                                }
+                                                                return;
+                                                            }
                                                             if (formData._editorMode !== 'html' && editorRef.current) {
                                                                 if (action === 'insertRowBelow') editorRef.current.insertRow('below');
                                                                 else if (action === 'insertColumnRight') editorRef.current.insertColumn('right');
@@ -3928,7 +3983,7 @@
                                                                 else if (action === 'unmergeCells') editorRef.current.unmergeCells();
                                                                 else if (action === 'formatCell') editorRef.current.formatCell(payload.attr, payload.value);
                                                             } else {
-                                                                alert('表の操作はWYSIWYGモードで行ってください。');
+                                                                alert('表の構成変更はWYSIWYGモードで行ってください。');
                                                             }
                                                         }}
                                                     />
