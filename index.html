@@ -1590,12 +1590,16 @@
         };
 
         // --- Table Inserter ---
-        const TableInserter = ({ onInsert, onAction, isWysiwyg }) => {
+        const TableInserter = ({ onInsert, onAction, isWysiwyg, canCreateSheet }) => {
             const [rows, setRows] = React.useState(3);
             const [cols, setCols] = React.useState(3);
             const [pasteArea, setPasteArea] = React.useState('');
-            const [showPaste, setShowPaste] = React.useState('normal'); // 'normal', 'copy', 'live'
+            const [showPaste, setShowPaste] = React.useState('normal'); // 'normal', 'copy', 'live', 'cloud', 'data'
             const [sheetUrl, setSheetUrl] = React.useState('');
+
+            // Cloud Create Option State
+            const [cloudMode, setCloudMode] = React.useState('new'); // 'new' | 'copy'
+            const [templateUrl, setTemplateUrl] = React.useState('');
 
             const handlePasteInsert = () => {
                 if (!pasteArea.trim()) return;
@@ -1612,7 +1616,9 @@
                         </label>
                         <div className="flex gap-2">
                             <button onClick={() => setShowPaste('normal')} className={`text-[10px] ${showPaste === 'normal' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>通常</button>
-                            <button onClick={() => setShowPaste('cloud')} className={`text-[10px] ${showPaste === 'cloud' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>クラウド制作</button>
+                            {canCreateSheet && (
+                                <button onClick={() => setShowPaste('cloud')} className={`text-[10px] ${showPaste === 'cloud' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>クラウド制作</button>
+                            )}
                             <button onClick={() => setShowPaste('copy')} className={`text-[10px] ${showPaste === 'copy' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>コピペ</button>
                             <button onClick={() => setShowPaste('live')} className={`text-[10px] ${showPaste === 'live' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>ライブ同期</button>
                             <button onClick={() => setShowPaste('data')} className={`text-[10px] ${showPaste === 'data' ? 'font-bold text-indigo-700' : 'text-gray-400'}`}>自動集計</button>
@@ -1622,51 +1628,162 @@
                     {showPaste === 'cloud' && (
                         /* クラウド制作エリア */
                         <div className="space-y-2 pb-2 border-b border-gray-100">
-                            <div className="text-[10px] text-gray-400 ml-1 font-bold">疑似アカウントで新規シートを作成</div>
+                            <div className="flex gap-4 mb-2 px-1">
+                                <label className="flex items-center gap-1 text-[10px] cursor-pointer hover:text-indigo-600">
+                                    <input type="radio" name="cloudMode" checked={cloudMode === 'new'} onChange={() => setCloudMode('new')} className="accent-indigo-600" /> 新規作成
+                                </label>
+                                <label className="flex items-center gap-1 text-[10px] cursor-pointer hover:text-indigo-600">
+                                    <input type="radio" name="cloudMode" checked={cloudMode === 'copy'} onChange={() => setCloudMode('copy')} className="accent-indigo-600" /> テンプレート複製
+                                </label>
+                            </div>
+
+                            {cloudMode === 'copy' && (
+                                <div className="space-y-1">
+                                    <input
+                                        className="w-full border p-1.5 text-[10px] rounded focus:border-indigo-500 outline-none"
+                                        placeholder="テンプレート元シートのURLを貼り付け"
+                                        value={templateUrl}
+                                        onChange={e => setTemplateUrl(e.target.value)}
+                                    />
+                                </div>
+                            )}
+
+                            <div className="text-[10px] text-gray-500 ml-1 font-bold">
+                                {cloudMode === 'new' ? '疑似アカウントで新規シートを作成' : '指定シートをコピーして作成'}
+                            </div>
+
+
                             <button
                                 onClick={async (e) => {
                                     const btn = e.currentTarget;
                                     const proxyUrl = window.worldData?.spreadsheetProxyUrl;
                                     if (!proxyUrl) {
                                         alert("管理パネルから「GAS連携URL」を設定してください。");
+                                        alert("管理パネルから「GAS連携URL」を設定してください。");
                                         return;
                                     }
-                                    const title = prompt("新しいスプレッドシート名を入力してください", "Wiki Database");
-                                    if (!title) return;
 
-                                    btn.innerText = "作成中...";
+                                    // 権限チェック
+                                    if (!canCreateSheet) {
+                                        alert("この操作を行う権限がありません。");
+                                        return;
+                                    }
+
+                                    // Firebaseモジュールの確認
+                                    if (!window.firebaseModules || !window.db) {
+                                        alert("データベース接続が確立されていません。");
+                                        return;
+                                    }
+
+                                    // 【テスト用】Firebaseサービスアカウント設定
+                                    // GAS側ではなく、ここから秘密鍵を送信して認証させます。
+                                    // ※注意: このファイルが流出すると権限が奪われます。取り扱い注意。
+                                    // ダウンロードしたJSONファイルの中身をここに転記してください。
+                                    const SERVICE_ACCOUNT = {
+                                        client_email: "ここにclient_emailを貼り付け",
+                                        private_key: `-----BEGIN PRIVATE KEY-----
+ここに秘密鍵を貼り付け
+-----END PRIVATE KEY-----`,
+                                        project_id: "ここにproject_idを貼り付け"
+                                    };
+
+                                    let payload = { firebaseConfig: SERVICE_ACCOUNT };
+                                    let title = '';
+
+                                    if (cloudMode === 'new') {
+                                        title = prompt("新しいスプレッドシート名を入力してください", "Wiki Data Sheet");
+                                        if (!title) return;
+                                        payload = { action: 'create', title };
+                                    } else {
+                                        if (!templateUrl) { alert('テンプレートURLを入力してください'); return; }
+                                        const match = templateUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+                                        if (!match) { alert('有効なGoogleスプレッドシートURLではありません'); return; }
+
+                                        title = prompt("作成するスプレッドシート名を入力してください", "Wiki Data Sheet (Copy)");
+                                        if (!title) return;
+
+                                        payload = { action: 'copy', title, templateId: match[1] };
+                                    }
+
+                                    const originalText = btn.innerText;
+                                    btn.innerText = "作成中(GAS連携)...";
                                     btn.disabled = true;
 
+                                    // Firestoreでの応答待機用パス
+                                    const requestId = 'req_' + Math.random().toString(36).substr(2, 9);
+                                    // パスは artifacts/{context}/public/data/worlds/{worldId}/requests/{requestId} とする
+                                    const requestPath = `artifacts/${window.appContextId}/public/data/worlds/${window.worldId}/requests/${requestId}`;
+                                    payload.firestorePath = requestPath;
+
+                                    let unsub = null;
+                                    let timeoutId = null;
+
                                     try {
-                                        const res = await fetch(proxyUrl, {
-                                            method: 'POST',
-                                            mode: 'no-cors', // GAS WebApp fallback
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({ action: 'create', title: title })
+                                        // 1. 完了監視リスナーの設置
+                                        const { doc, onSnapshot, deleteDoc } = window.firebaseModules;
+                                        const requestDocRef = doc(window.db, requestPath);
+
+                                        await new Promise((resolve, reject) => {
+                                            // タイムアウト設定 (30秒)
+                                            timeoutId = setTimeout(() => {
+                                                reject(new Error("応答タイムアウト: GASからの応答がありませんでした。"));
+                                            }, 30000);
+
+                                            unsub = onSnapshot(requestDocRef, (snap) => {
+                                                if (snap.exists()) {
+                                                    const data = snap.data();
+                                                    if (data.status === 'success' && data.url) {
+                                                        // 成功: URL挿入
+                                                        onAction('insertEmbed', `#googlesheet(${data.url})`);
+                                                        alert("シート作成完了！自動挿入しました。");
+                                                        // クリーンアップ
+                                                        deleteDoc(requestDocRef).catch(console.error);
+                                                        resolve();
+                                                    } else if (data.status === 'error') {
+                                                        reject(new Error(data.message || 'Unknown GAS Error'));
+                                                    }
+                                                }
+                                            });
+
+                                            // 2. GASへリクエスト送信 (no-corsでも送信はされる)
+                                            fetch(proxyUrl, {
+                                                method: 'POST',
+                                                mode: 'no-cors',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify(payload)
+                                            }).then(() => {
+                                                console.log("GAS Request Sent. Waiting for Firestore update at:", requestPath);
+                                            }).catch(reject);
                                         });
 
-                                        // mode: 'no-cors' の場合結果が読めないため、
-                                        // ユーザーへ案内を出すか、JSONP等別の手段を検討する必要がありますが
-                                        // ここでは標準的な構成を提案します。
-                                        alert("疑似アカウント（GAS）に作成命令を送りました。GASの設定が正しければ、数秒後にシートがドライブに生成されます。URLをここに入力するか、GASの結果を待ちます。");
-                                        const url = prompt("生成されたシートのURL（または共有URL）を貼り付けてください。");
-                                        if (url) {
-                                            onAction('insertEmbed', `#googlesheet(${url})`);
-                                            setShowPaste('normal');
-                                        }
+                                        setSheetUrl('');
+                                        setShowPaste('normal');
+
                                     } catch (err) {
-                                        alert("通信失敗: " + err.message);
+                                        console.error(err);
+                                        // 自動連携失敗時のフォールバック: 手動入力
+                                        const manually = confirm("自動連携に失敗しました（" + err.message + "）。\nしかし、シート自体は作成されている可能性があります。\n手動でURLを入力しますか？");
+                                        if (manually) {
+                                            const url = prompt("作成されたシートのURLがあれば入力してください。");
+                                            if (url) {
+                                                onAction('insertEmbed', `#googlesheet(${url})`);
+                                                setShowPaste('normal');
+                                            }
+                                        }
                                     } finally {
-                                        btn.innerText = "Googleシートを新規作成";
+                                        if (unsub) unsub();
+                                        if (timeoutId) clearTimeout(timeoutId);
+                                        btn.innerText = originalText;
                                         btn.disabled = false;
                                     }
                                 }}
                                 className="w-full bg-blue-600 text-white hover:bg-blue-700 py-2 rounded text-[11px] font-bold transition-all shadow-sm flex items-center justify-center gap-2"
                             >
-                                <img src="https://www.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png" className="w-4 h-4" /> Googleシートを新規作成
+                                <img src="https://www.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png" className="w-4 h-4" />
+                                {cloudMode === 'new' ? 'Googleシートを新規作成' : 'テンプレートから作成'}
                             </button>
-                            <div className="text-[9px] text-gray-500 italic px-1">
-                                ※システム側のGoogleアカウントを使ってシートを自動生成します。
+                            <div className="text-[9px] text-gray-400 italic px-1">
+                                ※GASスクリプト側で {cloudMode === 'new' ? 'create' : 'copy'} アクションに対応している必要があります。
                             </div>
                         </div>
                     )}
@@ -4265,8 +4382,12 @@
                                             </h2>
                                         </div>
                                         <div className="flex gap-2">
-                                            <button onClick={() => startEditingArticle(selectedArticle)} className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-bold rounded shadow-sm hover:bg-indigo-700">編集</button>
-                                            <button onClick={() => handleDuplicateArticle(selectedArticle)} className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-bold rounded shadow-sm hover:bg-emerald-700">複製</button>
+                                            {isEditor && (
+                                                <>
+                                                    <button onClick={() => startEditingArticle(selectedArticle)} className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-bold rounded shadow-sm hover:bg-indigo-700">編集</button>
+                                                    <button onClick={() => handleDuplicateArticle(selectedArticle)} className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-bold rounded shadow-sm hover:bg-emerald-700">複製</button>
+                                                </>
+                                            )}
                                             {(myRole === 'owner' || myRole === 'admin') && <button onClick={() => handleDeleteArticle(selectedArticle)} className="px-4 py-1.5 bg-red-600 text-white text-sm font-bold rounded shadow-sm hover:bg-red-700">削除</button>}
                                         </div>
                                     </div>
@@ -4377,8 +4498,10 @@
                                                             editorRef.current.insertLink(a);
                                                         }
                                                     }} />
+                                                    }} />
                                                     <TableInserter
                                                         isWysiwyg={formData._editorMode !== 'html'}
+                                                        canCreateSheet={isEditor}
                                                         onInsert={(r, c) => {
                                                             if (formData._editorMode === 'html' && htmlTextareaRef.current) {
                                                                 const ta = htmlTextareaRef.current;
