@@ -3405,6 +3405,150 @@
             );
         };
 
+        // --- SimpleBarChart: 棒グラフ表示用コンポーネント ---
+        // 年ごとにグループ化された棒グラフを描画
+        const SimpleBarChart = ({ width = 700, height = 260, series = [], formatValue = (v) => String(v) }) => {
+            const [hoveredBar, setHoveredBar] = React.useState(null); // ホバー中の棒情報
+
+            if (!series || series.length === 0) return <div className="bg-white p-6 rounded shadow text-center text-gray-400">データがありません</div>;
+
+            // 全年度を収集
+            const yearsSet = new Set();
+            let maxVal = 0;
+            series.forEach(s => s.points.forEach(p => {
+                yearsSet.add(p.year);
+                if (p.value > maxVal) maxVal = p.value;
+            }));
+            const years = Array.from(yearsSet).sort((a, b) => a - b);
+            if (years.length === 0) return <div className="bg-white p-6 rounded shadow text-center text-gray-400">データ不足</div>;
+
+            const padding = { l: 60, r: 20, t: 30, b: 40 };
+            const gw = width - padding.l - padding.r;
+            const gh = height - padding.t - padding.b;
+
+            // 年ごとのグループ幅とバー幅を計算
+            const seriesCount = series.length;
+            const groupWidth = gw / years.length; // 各年のグループ幅
+            const barPadding = 4; // バー間のパディング
+            const groupPadding = 8; // グループ間のパディング
+            const barWidth = Math.max(8, (groupWidth - groupPadding * 2) / seriesCount - barPadding);
+
+            // 座標計算関数
+            const getGroupX = (year) => padding.l + years.indexOf(year) * groupWidth;
+            const getBarY = (v) => padding.t + gh - ((v / (maxVal || 1)) * gh);
+            const getBarHeight = (v) => (v / (maxVal || 1)) * gh;
+
+            // カラーパレット（折れ線グラフと共通）
+            const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'];
+
+            // Y軸目盛り（縦軸ラベル）
+            const yTicksCount = 5;
+            const yTicks = Array.from({ length: yTicksCount }).map((_, i) => {
+                const val = maxVal * (1 - i / (yTicksCount - 1));
+                if (Math.abs(val) >= 1000) return Math.round(val);
+                return Math.round(val * 100) / 100;
+            });
+
+            return (
+                <svg width={width} height={height} className="bg-white rounded-lg shadow-sm">
+                    <rect x="0" y="0" width={width} height={height} fill="transparent" />
+
+                    {/* グリッド線とY軸ラベル */}
+                    {Array.from({ length: yTicksCount }).map((_, i) => {
+                        const y = padding.t + (gh / (yTicksCount - 1)) * i;
+                        const tickVal = yTicks[i];
+                        return (
+                            <g key={`yg_${i}`}>
+                                <line x1={padding.l} x2={width - padding.r} y1={y} y2={y} stroke="#eee" />
+                                <text x={padding.l - 8} y={y + 4} fontSize="10" textAnchor="end" fill="#666">{formatValue(tickVal)}</text>
+                            </g>
+                        );
+                    })}
+
+                    {/* X軸（年度ラベル） */}
+                    {years.map((year, i) => (
+                        <text
+                            key={year}
+                            x={getGroupX(year) + groupWidth / 2}
+                            y={height - 8}
+                            fontSize="10"
+                            textAnchor="middle"
+                            fill="#666"
+                        >
+                            {year}
+                        </text>
+                    ))}
+
+                    {/* 棒グラフ本体 */}
+                    {series.map((s, si) => {
+                        const color = colors[si % colors.length];
+                        return (
+                            <g key={s.key}>
+                                {s.points.map((p, pi) => {
+                                    const groupX = getGroupX(p.year);
+                                    const barX = groupX + groupPadding + si * (barWidth + barPadding);
+                                    const barH = getBarHeight(p.value);
+                                    const barY = getBarY(p.value);
+                                    const isHovered = hoveredBar && hoveredBar.seriesKey === s.key && hoveredBar.year === p.year;
+
+                                    return (
+                                        <rect
+                                            key={`${s.key}-${p.year}`}
+                                            x={barX}
+                                            y={barY}
+                                            width={barWidth}
+                                            height={barH}
+                                            fill={color}
+                                            opacity={isHovered ? 1 : 0.85}
+                                            rx={2}
+                                            ry={2}
+                                            style={{ transition: 'opacity 0.15s ease', cursor: 'pointer' }}
+                                            onMouseEnter={() => setHoveredBar({ seriesKey: s.key, year: p.year, value: p.value, x: barX + barWidth / 2, y: barY })}
+                                            onMouseLeave={() => setHoveredBar(null)}
+                                        />
+                                    );
+                                })}
+                            </g>
+                        );
+                    })}
+
+                    {/* 凡例（右上に表示） */}
+                    {series.map((s, si) => {
+                        const color = colors[si % colors.length];
+                        return (
+                            <g key={`legend-${s.key}`}>
+                                <rect x={width - padding.r - 80} y={padding.t + si * 18} width={12} height={12} fill={color} rx={2} />
+                                <text x={width - padding.r - 64} y={padding.t + 10 + si * 18} fontSize="11" fill="#333">{s.key}</text>
+                            </g>
+                        );
+                    })}
+
+                    {/* ホバー時のツールチップ */}
+                    {hoveredBar && (
+                        <g>
+                            <rect
+                                x={hoveredBar.x - 40}
+                                y={hoveredBar.y - 30}
+                                width={80}
+                                height={24}
+                                fill="rgba(0,0,0,0.8)"
+                                rx={4}
+                            />
+                            <text
+                                x={hoveredBar.x}
+                                y={hoveredBar.y - 13}
+                                fontSize="11"
+                                textAnchor="middle"
+                                fill="white"
+                            >
+                                {hoveredBar.seriesKey}: {formatValue(hoveredBar.value)}
+                            </text>
+                        </g>
+                    )}
+                </svg>
+            );
+        };
+
         const GraphView = ({ setView, articles = [] }) => {
             const [conditionTags, setConditionTags] = React.useState([]); // 条件タグ（複数）
             const [elementTags, setElementTags] = React.useState([]); // 要素タグ（複数選択）
@@ -3412,6 +3556,7 @@
             const [statusB, setStatusB] = React.useState('');
             const [op, setOp] = React.useState('+');
             const [series, setSeries] = React.useState([]);
+            const [chartType, setChartType] = React.useState('line'); // グラフタイプ: 'line' or 'bar'
             const tags = collectAllTags(articles);
             const statuses = collectAllStatusLabels(articles);
 
@@ -3462,10 +3607,34 @@
                         </div>
                     </div>
 
-                    <div className="flex gap-2"><button onClick={runAggregate} className="px-4 py-2 bg-indigo-600 text-white rounded font-bold">グラフ生成</button><button onClick={() => { setConditionTags([]); setElementTag(''); setStatusA(''); setStatusB(''); setOp('+'); setSeries([]); }} className="px-4 py-2 border rounded">リセット</button></div>
+                    <div className="flex gap-2 items-center flex-wrap">
+                        <button onClick={runAggregate} className="px-4 py-2 bg-indigo-600 text-white rounded font-bold">グラフ生成</button>
+                        <button onClick={() => { setConditionTags([]); setElementTags([]); setStatusA(''); setStatusB(''); setOp('+'); setSeries([]); }} className="px-4 py-2 border rounded">リセット</button>
+
+                        {/* グラフタイプ切り替えボタン */}
+                        <div className="flex bg-gray-100 rounded p-1 ml-4">
+                            <button
+                                onClick={() => setChartType('line')}
+                                className={`flex items-center gap-1 px-3 py-1 text-sm rounded transition ${chartType === 'line' ? 'bg-white text-indigo-600 font-bold shadow-sm' : 'text-gray-600 hover:text-gray-800'}`}
+                            >
+                                <Icon name="trending-up" size={14} /> 折れ線
+                            </button>
+                            <button
+                                onClick={() => setChartType('bar')}
+                                className={`flex items-center gap-1 px-3 py-1 text-sm rounded transition ${chartType === 'bar' ? 'bg-white text-indigo-600 font-bold shadow-sm' : 'text-gray-600 hover:text-gray-800'}`}
+                            >
+                                <Icon name="bar-chart-2" size={14} /> 棒グラフ
+                            </button>
+                        </div>
+                    </div>
 
                     <div>
-                        <SimpleLineChart series={series} />
+                        {/* 選択されたグラフタイプに応じてコンポーネントを切り替え */}
+                        {chartType === 'line' ? (
+                            <SimpleLineChart series={series} />
+                        ) : (
+                            <SimpleBarChart series={series} />
+                        )}
                         {series.length === 0 && <div className="text-sm text-gray-500 mt-2">記事の時間を X 軸（記事の年代）として、選択した統計ステータスを記事単位で集計します。記事内のテーブルや `stats` のラベルをステータス名として扱います。</div>}
                     </div>
                 </div>
