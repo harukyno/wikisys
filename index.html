@@ -3273,7 +3273,15 @@
                 // from tables
                 const tableMap = parseTablesFromHtml(a.contentHtml || '');
                 Object.keys(tableMap).forEach(k => set.add(k));
+                // from fetched sheet data (if available)
+                if (a.fetchedSheetData) {
+                    Object.keys(a.fetchedSheetData).forEach(k => set.add(k));
+                }
             });
+            // マッピング設定のフィールド名も候補に追加
+            const mappings = window.worldData?.sheetFieldMappings || [];
+            mappings.forEach(m => set.add(m.field));
+
             return Array.from(set).sort((a, b) => a.localeCompare(b));
         };
 
@@ -3297,9 +3305,17 @@
                         if (lbl && !isNaN(v)) map[String(lbl)] = (map[String(lbl)] || 0) + Number(v);
                     });
                 }
-                // tables
                 const tableMap = parseTablesFromHtml(a.contentHtml || '');
                 Object.keys(tableMap).forEach(k => { map[k] = (map[k] || 0) + Number(tableMap[k]); });
+
+                // fetched sheet data
+                if (a.fetchedSheetData) {
+                    Object.keys(a.fetchedSheetData).forEach(k => {
+                        const val = parseFloat(a.fetchedSheetData[k]);
+                        if (!isNaN(val)) map[k] = (map[k] || 0) + Number(val);
+                    });
+                }
+
                 return { article: a, year, map };
             });
 
@@ -3549,6 +3565,60 @@
             );
         };
 
+        // スプレッドシートからデータを取得する非同期関数
+        const fetchSheetDataForArticle = async (article, mappings) => {
+            const content = article.contentHtml || '';
+            const sheetMatch = content.match(/#googlesheet\(([^)]+)\)/);
+            if (!sheetMatch || mappings.length === 0) return {};
+
+            const sheetUrl = sheetMatch[1];
+            const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+            if (!sheetIdMatch) return {};
+
+            const sheetId = sheetIdMatch[1];
+            const proxyUrl = window.worldData?.spreadsheetProxyUrl;
+            if (!proxyUrl) return {};
+
+            return new Promise((resolve) => {
+                const callbackName = 'sheet_cb_' + Math.random().toString(36).substr(2, 9);
+                const timeout = setTimeout(() => {
+                    delete window[callbackName];
+                    resolve({});
+                }, 10000); // 10秒タイムアウト
+
+                window[callbackName] = (res) => {
+                    clearTimeout(timeout);
+                    delete window[callbackName];
+                    const s = document.getElementById(callbackName);
+                    if (s) s.remove();
+
+                    if (res.status === 'success' && res.values) {
+                        const result = {};
+                        mappings.forEach(m => {
+                            if (res.values[m.cell] !== undefined) {
+                                result[m.field] = res.values[m.cell];
+                            }
+                        });
+                        resolve(result);
+                    } else {
+                        resolve({});
+                    }
+                };
+
+                const cells = mappings.map(m => m.cell).join(',');
+                const params = new URLSearchParams();
+                params.set('callback', callbackName);
+                params.set('action', 'getCellValues');
+                params.set('sheetId', sheetId);
+                params.set('cells', cells);
+
+                const script = document.createElement('script');
+                script.id = callbackName;
+                script.src = proxyUrl + (proxyUrl.includes('?') ? '&' : '?') + params.toString();
+                document.body.appendChild(script);
+            });
+        };
+
         const GraphView = ({ setView, articles = [] }) => {
             const [conditionTags, setConditionTags] = React.useState([]); // 条件タグ（複数）
             const [elementTags, setElementTags] = React.useState([]); // 要素タグ（複数選択）
@@ -3557,16 +3627,75 @@
             const [op, setOp] = React.useState('+');
             const [series, setSeries] = React.useState([]);
             const [chartType, setChartType] = React.useState('line'); // グラフタイプ: 'line' or 'bar'
-            const tags = collectAllTags(articles);
-            const statuses = collectAllStatusLabels(articles);
+            const [isSyncing, setIsSyncing] = React.useState(false); // 同期処理中のフラグ
+            const [enrichedArticles, setEnrichedArticles] = React.useState(articles); // スプレッドシートデータを付加した記事リスト
+
+            // 記事リストが変わったらenrichedArticlesも初期化
+            React.useEffect(() => {
+                setEnrichedArticles(articles);
+            }, [articles]);
+
+            const tags = collectAllTags(enrichedArticles);
+            const statuses = collectAllStatusLabels(enrichedArticles);
 
             const toggleConditionTag = (t) => setConditionTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
             const toggleElementTag = (t) => setElementTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
             const runAggregate = () => {
                 if (!statusA && !statusB) { alert('少なくとも1つの統計ステータスを選択してください'); return; }
-                const s = aggregateSeriesByGroup(articles, conditionTags, elementTags, statusA, statusB, op);
+                const s = aggregateSeriesByGroup(enrichedArticles, conditionTags, elementTags, statusA, statusB, op);
                 setSeries(s);
+            };
+
+            const syncSpreadsheetData = async () => {
+                if (!window.worldData?.spreadsheetProxyUrl) {
+                    alert('GAS連携URLが設定されていません。世界設定から設定してください。');
+                    return;
+                }
+                const mappings = window.worldData?.sheetFieldMappings || [];
+                if (mappings.length === 0) {
+                    alert('スプレッドシート値マッピングが設定されていません。');
+                    return;
+                }
+
+                setIsSyncing(true);
+                try {
+                    const targets = articles.filter(a => (a.contentHtml || '').includes('#googlesheet'));
+                    if (targets.length === 0) {
+                        alert('スプレッドシートを含む記事が見つかりません。');
+                        setIsSyncing(false);
+                        return;
+                    }
+
+                    // 並列実行数を制限しつつ実行（5並列）
+                    const results = [];
+                    const chunkSize = 5;
+                    for (let i = 0; i < targets.length; i += chunkSize) {
+                        const chunk = targets.slice(i, i + chunkSize);
+                        const chunkResults = await Promise.all(chunk.map(async (article) => {
+                            const data = await fetchSheetDataForArticle(article, mappings);
+                            return { id: article.id, sheetData: data };
+                        }));
+                        results.push(...chunkResults);
+                    }
+
+                    // 取得データを記事にマージ
+                    const newArticles = articles.map(a => {
+                        const fetched = results.find(r => r.id === a.id);
+                        if (fetched && Object.keys(fetched.sheetData).length > 0) {
+                            return { ...a, fetchedSheetData: fetched.sheetData };
+                        }
+                        return a;
+                    });
+
+                    setEnrichedArticles(newArticles);
+                    alert(`同期完了: ${results.filter(r => Object.keys(r.sheetData).length > 0).length} 件の記事からデータを取得しました。`);
+                } catch (e) {
+                    console.error(e);
+                    alert('同期中にエラーが発生しました');
+                } finally {
+                    setIsSyncing(false);
+                }
             };
 
             return (
@@ -3604,6 +3733,17 @@
                                 <option value="*">×</option>
                                 <option value="/">÷</option>
                             </select>
+                        </div>
+
+                        <div className="col-span-3 flex justify-end">
+                            <button
+                                onClick={syncSpreadsheetData}
+                                disabled={isSyncing}
+                                className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded border transition ${isSyncing ? 'bg-gray-100 text-gray-400' : 'bg-green-50 text-green-700 hover:bg-green-100 border-green-200'}`}
+                            >
+                                {isSyncing ? <div className="animate-spin h-3 w-3 border-2 border-green-500 rounded-full border-t-transparent"></div> : <Icon name="refresh-cw" size={12} />}
+                                {isSyncing ? 'データ同期中...' : 'スプレッドシートデータ同期'}
+                            </button>
                         </div>
                     </div>
 
