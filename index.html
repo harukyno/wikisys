@@ -1629,7 +1629,7 @@
                 if (searchMode === 'tag') {
                     // タグ検索: 記事のタグ配列に部分一致するタグが含まれているかチェック
                     return articles.filter(a =>
-                        a.tags && a.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
+                        Array.isArray(a.tags) && a.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
                     );
                 } else {
                     // 記事名検索
@@ -1674,9 +1674,9 @@
                                         <div className="overflow-x-auto whitespace-nowrap text-sm font-medium" style={{ maxWidth: '100%' }} title={a.title}>
                                             {a.title}
                                         </div>
-                                        {searchMode === 'tag' && a.tags && a.tags.length > 0 && (
+                                        {searchMode === 'tag' && Array.isArray(a.tags) && a.tags.length > 0 && (
                                             <div className="flex flex-wrap gap-1 mt-1">
-                                                {a.tags.map(tag => (
+                                                {a.tags.filter(t => typeof t === 'string').map(tag => (
                                                     <span key={tag} className="text-[10px] bg-gray-100 text-gray-600 px-1 rounded">
                                                         #{tag}
                                                     </span>
@@ -2194,7 +2194,7 @@
 
                 targetArticles.forEach(article => {
                     const hasFolder = !!article.folder;
-                    const hasTags = article.tags && article.tags.length > 0;
+                    const hasTags = Array.isArray(article.tags) && article.tags.length > 0;
                     const hasPendingTag = hasTags && article.tags.includes('分類待ち');
 
                     if (!hasFolder) {
@@ -2292,7 +2292,7 @@
                                                 <div className="text-xs text-slate-400 line-clamp-3 mb-2" dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
                                             </div>
                                             <div className="px-4 pb-4 pt-0 mt-auto">
-                                                <div className="flex flex-wrap gap-1">{article.tags?.slice(0, 3).map(tag => <span key={tag} className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">#{tag}</span>)}</div>
+                                                <div className="flex flex-wrap gap-1">{Array.isArray(article.tags) && article.tags.slice(0, 3).map(tag => <span key={tag} className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">#{tag}</span>)}</div>
                                             </div>
                                         </>
                                     ) : (
@@ -2303,7 +2303,7 @@
                                                 <span dangerouslySetInnerHTML={{ __html: applyRuby(escapeHtml(article.title)) }}></span>
                                             </h3>
                                             <div className="text-sm text-slate-300 mb-4 leading-relaxed line-clamp-3" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
-                                            <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{article.tags?.map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
+                                            <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{Array.isArray(article.tags) && article.tags.map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
                                         </>
                                     )}
                                 </div>
@@ -3324,7 +3324,7 @@
             const groups = new Map();
             const useGroupTags = Array.isArray(groupTags) && groupTags.length > 0;
             perArticle.forEach(({ article, year, map }) => {
-                const tags = (article.tags || []).map(t => String(t));
+                const tags = (Array.isArray(article.tags) ? article.tags : []).map(t => String(t));
                 if (useGroupTags) {
                     groupTags.forEach(gt => {
                         if (tags.includes(gt)) {
