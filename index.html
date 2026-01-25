@@ -2147,38 +2147,7 @@
             const [showSidebar, setShowSidebar] = React.useState(false);
             const [layoutStyle, setLayoutStyle] = React.useState('list'); // 'list' | 'grid'
 
-            const handleContentClick = (e) => {
-                const link = e.target.closest && e.target.closest('.wiki-link');
-                if (!link) return;
-                e.preventDefault(); e.stopPropagation();
-                const id = link.getAttribute('data-article-id');
-                const wikiTitle = link.getAttribute('data-wiki-title');
-                if (id) {
-                    const target = articles.find(a => a.id === id);
-                    if (target) {
-                        const y = getArticleYear(target);
-                        const hasYear = y && y !== 0 && !target.noYear;
-                        if (typeof onSearchChange === 'function') {
-                            try { onSearchChange({ excludeNoYear: hasYear }); } catch (e) { console.warn(e); }
-                        }
-                        if (onSelectArticle) onSelectArticle(target);
-                    } else alert('リンク先の記事が見つかりません');
-                } else if (wikiTitle) {
-                    if (wikiTitle === '年代なし' && onOpenNoYear) {
-                        onOpenNoYear();
-                        return;
-                    }
-                    const target = articles.find(a => (a.title || '').trim() === wikiTitle.trim());
-                    if (target) {
-                        const y = getArticleYear(target);
-                        const hasYear = y && y !== 0 && !target.noYear;
-                        if (typeof onSearchChange === 'function') {
-                            try { onSearchChange({ excludeNoYear: hasYear }); } catch (e) { console.warn(e); }
-                        }
-                        if (onSelectArticle) onSelectArticle(target);
-                    } else alert('リンク先の記事が見つかりません');
-                }
-            };
+            // handleContentClick moved after folderTree definition
 
             const folderTree = React.useMemo(() => {
                 const root = { name: 'root', fullPath: '', children: {}, articles: [] };
@@ -2229,6 +2198,56 @@
 
                 return { root, allNode: allArticlesNode };
             }, [articles, filterFn]);
+
+            const handleContentClick = (e) => {
+                const link = e.target.closest && e.target.closest('.wiki-link');
+                if (!link) return;
+                e.preventDefault(); e.stopPropagation();
+                const id = link.getAttribute('data-article-id');
+                const wikiTitle = link.getAttribute('data-wiki-title');
+
+                const findAndSelectArticle = (target) => {
+                    const y = getArticleYear(target);
+                    const hasYear = y && y !== 0 && !target.noYear;
+                    if (typeof onSearchChange === 'function') {
+                        try { onSearchChange({ excludeNoYear: hasYear }); } catch (e) { console.warn(e); }
+                    }
+                    if (onSelectArticle) onSelectArticle(target);
+                };
+
+                if (id) {
+                    const target = articles.find(a => a.id === id);
+                    if (target) {
+                        findAndSelectArticle(target);
+                    } else alert('リンク先の記事が見つかりません');
+                } else if (wikiTitle) {
+                    if (wikiTitle === '年代なし' && onOpenNoYear) {
+                        onOpenNoYear();
+                        return;
+                    }
+                    const target = articles.find(a => (a.title || '').trim() === wikiTitle.trim());
+                    if (target) {
+                        findAndSelectArticle(target);
+                    } else {
+                        // 記事が見つからない場合、フォルダを探す
+                        const findFolder = (node) => {
+                            if (node.name === wikiTitle || node.fullPath === wikiTitle) return node;
+                            for (const key in node.children) {
+                                const found = findFolder(node.children[key]);
+                                if (found) return found;
+                            }
+                            return null;
+                        };
+                        const foundFolder = findFolder(folderTree.root);
+                        if (foundFolder) {
+                            setSelectedFolderNode(foundFolder);
+                            // スマホなどのためにサイドバーを表示する？必要なら setShowSidebar(true);
+                        } else {
+                            alert('リンク先の記事またはフォルダが見つかりません');
+                        }
+                    }
+                }
+            };
 
             React.useEffect(() => { if (!selectedFolderNode && articles.length > 0) setSelectedFolderNode(folderTree.allNode); }, [articles, selectedFolderNode, folderTree]);
 
