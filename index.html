@@ -332,7 +332,8 @@
             { key: 'map', label: '地図', icon: 'map' },
             { key: 'timeline_large', label: '構造年表', icon: 'git-branch' },
             { key: 'spreadsheet', label: 'データ', icon: 'table-2' },
-            { key: 'stats', label: '統計', icon: 'bar-chart-2' }
+            { key: 'stats', label: '統計', icon: 'bar-chart-2' },
+            { key: 'wiki', label: 'Wiki閲覧', icon: 'book-open' }
         ];
 
         // Region tag rules: define rectangles or circles to auto-assign tags when a location falls inside.
@@ -3781,6 +3782,343 @@
             );
         };
 
+        // --- WikiSidebar Component ---
+        const WikiSidebar = ({ articles, onNavigate, selectedArticleId }) => {
+            const [filterText, setFilterText] = React.useState('');
+            const [expandedFolders, setExpandedFolders] = React.useState({});
+
+            // フォルダ構造の構築
+            const folderTree = React.useMemo(() => {
+                const tree = { name: 'root', children: {}, articles: [] };
+
+                // フィルタリング
+                const targetArticles = filterText
+                    ? articles.filter(a => (a.title && a.title.toLowerCase().includes(filterText.toLowerCase())))
+                    : articles;
+
+                targetArticles.forEach(article => {
+                    if (!article.folder) {
+                        tree.articles.push(article);
+                    } else {
+                        const parts = article.folder.split('/').filter(p => p);
+                        let current = tree;
+                        parts.forEach(part => {
+                            if (!current.children[part]) {
+                                current.children[part] = { name: part, children: {}, articles: [] };
+                            }
+                            current = current.children[part];
+                        });
+                        current.articles.push(article);
+                    }
+                });
+
+                // 並び替え (フォルダ名順 -> 記事タイトル順)
+                const sortTree = (node) => {
+                    // childrenをオブジェクトから配列へ変換してソート
+                    const sortedChildren = Object.values(node.children).sort((a, b) => a.name.localeCompare(b.name));
+                    sortedChildren.forEach(sortTree);
+                    node.sortedChildren = sortedChildren;
+                    node.articles.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+                };
+                sortTree(tree);
+                return tree;
+            }, [articles, filterText]);
+
+            // 初期展開: 選択中の記事があるフォルダを開く
+            React.useEffect(() => {
+                if (selectedArticleId && articles.length > 0) {
+                    const article = articles.find(a => a.id === selectedArticleId);
+                    if (article && article.folder) {
+                        const parts = article.folder.split('/').filter(p => p);
+                        setExpandedFolders(prev => {
+                            const next = { ...prev };
+                            let path = '';
+                            parts.forEach(part => {
+                                path = path ? `${path}/${part}` : part;
+                                next[path] = true;
+                            });
+                            return next;
+                        });
+                    }
+                }
+            }, [selectedArticleId, articles]);
+
+            const toggleFolder = (path) => {
+                setExpandedFolders(prev => ({ ...prev, [path]: !prev[path] }));
+            };
+
+            const renderNode = (node, path = '') => {
+                return (
+                    <div key={path || 'root'} className="pl-2">
+                        {node.sortedChildren.map(child => {
+                            const childPath = path ? `${path}/${child.name}` : child.name;
+                            const isExpanded = expandedFolders[childPath] || filterText; // 検索時は全開
+                            return (
+                                <div key={childPath}>
+                                    <div
+                                        className="flex items-center gap-1 py-1 px-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-700 font-medium rounded select-none"
+                                        onClick={() => toggleFolder(childPath)}
+                                    >
+                                        <Icon name={isExpanded ? "folder-open" : "folder"} size={14} className="text-yellow-500" />
+                                        <span className="truncate">{child.name}</span>
+                                    </div>
+                                    {isExpanded && (
+                                        <div className="border-l border-gray-200 ml-2">
+                                            {renderNode(child, childPath)}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                        {node.articles.map(article => (
+                            <div
+                                key={article.id}
+                                onClick={() => onNavigate(article)}
+                                className={`flex items-center gap-2 py-1 px-2 text-sm cursor-pointer rounded ml-1 ${selectedArticleId === article.id ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}`}
+                            >
+                                <Icon name="file-text" size={12} className={selectedArticleId === article.id ? 'text-indigo-500' : 'text-gray-400'} />
+                                <span className="truncate">{article.title}</span>
+                            </div>
+                        ))}
+                    </div>
+                );
+            };
+
+            return (
+                <div className="flex flex-col h-full bg-gray-50 border-r w-64 shrink-0">
+                    <div className="p-3 border-b bg-white">
+                        <div className="relative">
+                            <Icon name="search" size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
+                            <input
+                                className="w-full pl-8 pr-2 py-1.5 text-sm border rounded bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+                                placeholder="記事を検索..."
+                                value={filterText}
+                                onChange={e => setFilterText(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+                        {renderNode(folderTree)}
+                        {folderTree.articles.length === 0 && folderTree.sortedChildren.length === 0 && (
+                            <div className="text-center text-xs text-gray-400 py-4">
+                                記事が見つかりません
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- WikiReadView Component ---
+        const WikiReadView = ({ article, articles, onNavigate, onBack, onForward, canGoBack, canGoForward, history, historyIndex, onHistoryJump, onClearHistory }) => {
+            const [showHistoryDropdown, setShowHistoryDropdown] = React.useState(false);
+
+            // 関連記事を取得（同じフォルダまたは同じタグ）
+            const relatedArticles = React.useMemo(() => {
+                if (!article) return [];
+                const related = articles.filter(a => {
+                    if (a.id === article.id) return false;
+                    if (a.folder === article.folder) return true;
+                    if (article.tags && a.tags) {
+                        return article.tags.some(tag => a.tags.includes(tag));
+                    }
+                    return false;
+                }).slice(0, 10);
+                return related;
+            }, [article, articles]);
+
+            if (!article) {
+                return (
+                    <div className="flex h-full bg-white overflow-hidden">
+                        {/* サイドバー */}
+                        <div className="hidden md:block h-full border-r relative z-10 w-64 shrink-0 shadow-sm">
+                            <WikiSidebar
+                                articles={articles}
+                                onNavigate={onNavigate}
+                                selectedArticleId={null}
+                            />
+                        </div>
+                        <div className="flex-1 flex items-center justify-center h-full">
+                            <div className="text-center text-gray-400">
+                                <Icon name="book-open" size={64} className="mx-auto mb-4 opacity-30" />
+                                <p className="text-lg">記事を選択してください</p>
+                                <p className="text-sm mt-2">サイドバーから記事を選択するか、検索してください</p>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex h-full bg-white overflow-hidden">
+                    {/* サイドバー */}
+                    <div className="hidden md:block h-full border-r relative z-10 w-64 shrink-0 shadow-sm">
+                        <WikiSidebar
+                            articles={articles}
+                            onNavigate={onNavigate}
+                            selectedArticleId={article?.id}
+                        />
+                    </div>
+
+                    {/* メインコンテンツエリア */}
+                    <div className="flex-1 flex flex-col h-full min-w-0">
+                        {/* ナビゲーションバー */}
+                        <div className="border-b px-4 py-3 bg-gray-50 flex items-center gap-3 flex-wrap shrink-0">
+                            {/* 戻る/進むボタン */}
+                            <div className="flex gap-1">
+                                <button
+                                    onClick={onBack}
+                                    disabled={!canGoBack}
+                                    className={`p-2 rounded transition ${canGoBack ? 'hover:bg-gray-200 text-gray-700' : 'text-gray-300 cursor-not-allowed'}`}
+                                    title="戻る"
+                                >
+                                    <Icon name="chevron-left" size={18} />
+                                </button>
+                                <button
+                                    onClick={onForward}
+                                    disabled={!canGoForward}
+                                    className={`p-2 rounded transition ${canGoForward ? 'hover:bg-gray-200 text-gray-700' : 'text-gray-300 cursor-not-allowed'}`}
+                                    title="進む"
+                                >
+                                    <Icon name="chevron-right" size={18} />
+                                </button>
+                            </div>
+
+                            {/* 履歴ドロップダウン */}
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowHistoryDropdown(!showHistoryDropdown)}
+                                    className="flex items-center gap-1 px-3 py-1.5 rounded hover:bg-gray-200 text-sm text-gray-700"
+                                    title="閲覧履歴"
+                                >
+                                    <Icon name="clock" size={16} />
+                                    <span>履歴</span>
+                                    <Icon name="chevron-down" size={14} />
+                                </button>
+
+                                {showHistoryDropdown && (
+                                    <>
+                                        <div className="fixed inset-0 z-10" onClick={() => setShowHistoryDropdown(false)} />
+                                        <div className="absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg z-20 w-80 max-h-96 overflow-y-auto">
+                                            {history.length === 0 ? (
+                                                <div className="p-4 text-sm text-gray-400 text-center">履歴はありません</div>
+                                            ) : (
+                                                <>
+                                                    <div className="p-2 border-b flex justify-between items-center bg-gray-50">
+                                                        <span className="text-xs font-bold text-gray-600">閲覧履歴 ({history.length}件)</span>
+                                                        <button
+                                                            onClick={() => {
+                                                                if (confirm('履歴をクリアしますか？')) {
+                                                                    onClearHistory();
+                                                                    setShowHistoryDropdown(false);
+                                                                }
+                                                            }}
+                                                            className="text-xs text-red-500 hover:text-red-700"
+                                                        >
+                                                            クリア
+                                                        </button>
+                                                    </div>
+                                                    {history.map((entry, idx) => (
+                                                        <button
+                                                            key={idx}
+                                                            onClick={() => {
+                                                                onHistoryJump(idx);
+                                                                setShowHistoryDropdown(false);
+                                                            }}
+                                                            className={`w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0 ${idx === historyIndex ? 'bg-indigo-50 font-bold' : ''}`}
+                                                        >
+                                                            <div className="text-sm truncate">{entry.articleTitle}</div>
+                                                            <div className="text-xs text-gray-400 mt-0.5">
+                                                                {new Date(entry.timestamp).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                </>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* パンくずリスト */}
+                            <div className="flex items-center gap-2 text-sm text-gray-600 flex-1 min-w-0">
+                                <Icon name="home" size={14} />
+                                <span>/</span>
+                                {article.folder && (
+                                    <>
+                                        <span className="truncate">{article.folder}</span>
+                                        <span>/</span>
+                                    </>
+                                )}
+                                <span className="font-bold text-gray-800 truncate">{article.title}</span>
+                            </div>
+                        </div>
+
+                        {/* 記事コンテンツ */}
+                        <div className="flex-1 overflow-y-auto custom-scrollbar">
+                            <div className="max-w-4xl mx-auto p-6 bg-white shadow-sm min-h-[50vh] rounded-lg">
+                                <h1 className="text-3xl font-serif text-gray-900 border-b pb-4 mb-6 leading-tight">
+                                    {article.title}
+                                    {article.isApproved && <span className="ml-2 align-middle"><Icon name="check-circle" size={20} className="text-emerald-500 inline" title="承認済み" /></span>}
+                                </h1>
+
+                                {/* 記事メタデータ */}
+                                <div className="flex flex-wrap gap-4 text-sm text-gray-500 mb-8 p-3 bg-gray-50 rounded border border-gray-100">
+                                    {article.dateStr && (
+                                        <div className="flex items-center gap-1">
+                                            <Icon name="calendar" size={14} />
+                                            <span>{article.dateStr}</span>
+                                        </div>
+                                    )}
+                                    {article.locations && article.locations.length > 0 && (
+                                        <div className="flex items-center gap-1">
+                                            <Icon name="map-pin" size={14} />
+                                            <span>{article.locations.join(', ')}</span>
+                                        </div>
+                                    )}
+                                    {article.tags && article.tags.length > 0 && (
+                                        <div className="flex items-center gap-1">
+                                            <Icon name="tag" size={14} />
+                                            <span>{article.tags.join(', ')}</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div
+                                    className="prose prose-lg max-w-none text-gray-800 leading-relaxed"
+                                    dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}
+                                />
+                            </div>
+                        </div>
+
+                        {/* 関連記事 */}
+                        {relatedArticles.length > 0 && (
+                            <div className="border-t px-6 py-4 bg-gray-50">
+                                <div className="max-w-4xl mx-auto">
+                                    <h3 className="text-sm font-bold text-gray-600 mb-3 flex items-center gap-2">
+                                        <Icon name="link" size={16} />
+                                        関連記事
+                                    </h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {relatedArticles.map(a => (
+                                            <button
+                                                key={a.id}
+                                                onClick={() => onNavigate(a)}
+                                                className="px-3 py-1.5 bg-white border rounded-lg hover:bg-indigo-50 hover:border-indigo-300 transition text-sm flex items-center gap-2"
+                                            >
+                                                <span className={`w-2 h-2 rounded-full ${ARTICLE_TYPES[a.type]?.color || 'bg-gray-300'}`} />
+                                                <span className="truncate max-w-xs">{a.title}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
         // --- AdjacentArticlePreview (Not used but kept for compatibility) ---
         const AdjacentArticlePreview = () => null;
 
@@ -3844,6 +4182,53 @@
             const [navBackView, setNavBackView] = React.useState('timeline_large'); // 記事詳細から戻る際のビューモード
             const isRestoringFromURL = React.useRef(false);
             const hasCheckedWorldURL = React.useRef(false); // URL復元中のフラグ
+
+            // Wiki閲覧履歴管理
+            const [wikiHistory, setWikiHistory] = React.useState([]);
+            const [wikiHistoryIndex, setWikiHistoryIndex] = React.useState(-1);
+
+            // Browser History & URL Sync
+            React.useEffect(() => {
+                const handlePopState = (event) => {
+                    const state = event.state;
+                    if (state) {
+                        console.log('PopState:', state);
+                        isRestoringFromURL.current = true;
+                        if (state.viewMode) setViewMode(state.viewMode);
+                        if (state.articleId) {
+                            const target = articles.find(a => a.id === state.articleId);
+                            if (target) setSelectedArticle(target);
+                        } else {
+                            setSelectedArticle(null);
+                        }
+                    }
+                };
+                window.addEventListener('popstate', handlePopState);
+                return () => window.removeEventListener('popstate', handlePopState);
+            }, [articles]);
+
+            React.useEffect(() => {
+                if (isRestoringFromURL.current) {
+                    isRestoringFromURL.current = false;
+                    return;
+                }
+                const params = new URLSearchParams(window.location.search);
+                if (viewMode) params.set('view', viewMode);
+                if (selectedArticle?.id) params.set('articleId', selectedArticle.id);
+                else params.delete('articleId');
+
+                const newUrl = window.location.pathname + '?' + params.toString();
+                if (window.location.search !== '?' + params.toString()) {
+                    window.history.pushState({ viewMode, articleId: selectedArticle?.id }, '', newUrl);
+                }
+            }, [viewMode, selectedArticle]);
+
+            // Wiki View Initialization (Add current article to history if empty)
+            React.useEffect(() => {
+                if (viewMode === 'wiki' && selectedArticle && wikiHistory.length === 0) {
+                    addToWikiHistory(selectedArticle, 'timeline_large');
+                }
+            }, [viewMode, selectedArticle, wikiHistory.length]);
 
             // Expose setViewMode to window for deep component access (hacky but effective for current structure)
             // Expose setViewMode to window for deep component access (hacky but effective for current structure)
@@ -4285,6 +4670,52 @@
                     alert('メンバーを追加しました');
                 } catch (e) { alert('追加エラー: ' + e.message); }
             };
+
+            // Wiki閲覧履歴管理関数
+            const addToWikiHistory = (article, sourceView = 'wiki') => {
+                if (!article || !article.id) return;
+
+                // 現在位置以降の履歴を削除（新しい分岐を作成）
+                const newHistory = wikiHistory.slice(0, wikiHistoryIndex + 1);
+
+                // 同じ記事が連続する場合は追加しない
+                if (newHistory.length > 0 && newHistory[newHistory.length - 1].articleId === article.id) {
+                    return;
+                }
+
+                newHistory.push({
+                    articleId: article.id,
+                    articleTitle: article.title,
+                    viewMode: sourceView,
+                    timestamp: Date.now()
+                });
+
+                // 履歴は最大50件まで保持
+                if (newHistory.length > 50) {
+                    newHistory.shift();
+                }
+
+                setWikiHistory(newHistory);
+                setWikiHistoryIndex(newHistory.length - 1);
+            };
+
+            const navigateWikiHistory = (delta) => {
+                const newIndex = wikiHistoryIndex + delta;
+                if (newIndex >= 0 && newIndex < wikiHistory.length) {
+                    const entry = wikiHistory[newIndex];
+                    const article = articles.find(a => a.id === entry.articleId);
+                    if (article) {
+                        setSelectedArticle(article);
+                        setWikiHistoryIndex(newIndex);
+                        setViewMode('wiki');
+                    }
+                }
+            };
+
+            const clearWikiHistory = () => {
+                setWikiHistory([]);
+                setWikiHistoryIndex(-1);
+            };
             const handleReapplyRegionTags = async () => {
                 if (!confirm('現在の全記事に対して、地域タグ・ルールを再適用しますか？\n\n・ルールに合致するタグが自動追加されます\n・場所が範囲外になった地域タグは自動削除されます\n・手動タグは維持されます')) return;
                 const { updateDoc, doc } = window.firebaseModules;
@@ -4488,31 +4919,29 @@
                         const id = link.getAttribute('data-article-id');
                         const wikiTitle = link.getAttribute('data-wiki-title');
 
-                        if (id) {
-                            const target = articles.find(a => a.id === id);
-                            if (target) openDetailView(target);
-                            else alert('記事が見つかりません');
-                        } else if (wikiTitle) {
-                            if (wikiTitle === '年代なし') {
-                                // Not strict handling here since viewMode change is enough
-                                alert('年代なし表示へ移動します（未実装）');
-                                // Actually we should implement setViewMode('timeline_noyear') if accessible, 
-                                // but here in App it is.
-                                // setTimelineFilters checks? 
-                                // Actually for index.html we might just use openArticleById logic below 
-                                // OR calling window.openArticleById if strictly needed.
-                                // Let's use internal logic:
+                        const target = id
+                            ? articles.find(a => a.id === id)
+                            : (wikiTitle ? articles.find(a => (a.title || '').trim() === wikiTitle.trim()) : null);
+
+                        if (target) {
+                            if (viewMode === 'wiki') {
+                                // Wikiモード時は履歴に追加して遷移
+                                addToWikiHistory(target, 'wiki');
+                                setSelectedArticle(target);
                             } else {
-                                const target = articles.find(a => (a.title || '').trim() === wikiTitle.trim());
-                                if (target) openDetailView(target);
-                                else alert('記事が見つかりません');
+                                // それ以外は詳細ビューロジック（年表や地図へ飛ぶ）
+                                openDetailView(target);
                             }
+                        } else if (wikiTitle === '年代なし') {
+                            alert('年代なし表示へ移動します（未実装）');
+                        } else if (id || wikiTitle) {
+                            alert('記事が見つかりません');
                         }
                     }
                 };
                 document.addEventListener('click', handleGlobalClick);
                 return () => document.removeEventListener('click', handleGlobalClick);
-            }, [articles]);
+            }, [articles, viewMode, wikiHistory, wikiHistoryIndex]); // 依存配列に必要なstateを追加
 
 
             // Expose openArticleById globally for spreadsheet and other components
@@ -4703,6 +5132,31 @@
                                 onAddMember={handleAddMember}
                             />}
                             {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} />}
+                            {viewMode === 'wiki' && (
+                                <WikiReadView
+                                    article={selectedArticle}
+                                    articles={articles}
+                                    history={wikiHistory}
+                                    historyIndex={wikiHistoryIndex}
+                                    canGoBack={wikiHistoryIndex > 0}
+                                    canGoForward={wikiHistoryIndex < wikiHistory.length - 1}
+                                    onNavigate={(nextArticle) => {
+                                        addToWikiHistory(nextArticle, 'wiki');
+                                        setSelectedArticle(nextArticle);
+                                    }}
+                                    onBack={() => navigateWikiHistory(-1)}
+                                    onForward={() => navigateWikiHistory(1)}
+                                    onHistoryJump={(idx) => {
+                                        const entry = wikiHistory[idx];
+                                        const target = articles.find(a => a.id === entry.articleId);
+                                        if (target) {
+                                            setSelectedArticle(target);
+                                            setWikiHistoryIndex(idx);
+                                        }
+                                    }}
+                                    onClearHistory={clearWikiHistory}
+                                />
+                            )}
                             {viewMode === 'spreadsheet' && <LargeSpreadsheetView articles={articles} db={db} appContextId={appContextId} worldId={worldId} filters={timelineFilters} />}
                             {viewMode === 'timeline_noyear' && (
                                 <div className="absolute inset-0 overflow-auto p-6 bg-slate-900">
