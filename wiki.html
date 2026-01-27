@@ -317,6 +317,12 @@
 
         const stripHtml = (html = '') => html.replace(/<[^>]*>/g, ' ');
 
+        const safeArray = (val) => {
+            if (Array.isArray(val)) return val;
+            if (typeof val === 'string') return val.split(',').map(s => s.trim()).filter(Boolean);
+            return [];
+        };
+
         // 年代抽出ユーティリティ
         const parseYear = (val) => {
             if (!val) return 0;
@@ -373,13 +379,13 @@
                         article.title,
                         article.folder,
                         stripHtml(article.contentHtml || ''),
-                        (article.tags || []).join(' '),
+                        safeArray(article.tags).join(' '),
                         article.representedTag || ''
                     ].join(' ').toLowerCase();
                     if (!haystack.includes(keyword)) return false;
                 }
                 if (tag) {
-                    const tags = (article.tags || []).map(t => t.toLowerCase());
+                    const tags = safeArray(article.tags).map(t => t.toLowerCase());
                     const rep = (article.representedTag || '').toLowerCase();
                     if (!tags.includes(tag) && rep !== tag) return false;
                 }
@@ -453,17 +459,19 @@
             React.useEffect(() => {
                 if (!containerRef.current) return;
                 const data = filtered.map(a => [
+                    a.id,
                     a.title,
                     a.type,
                     a.folder,
                     a.year || 0,
                     a.importance || 3,
-                    (a.tags || []).join(', ')
+                    safeArray(a.tags).join(', ')
                 ]);
                 if (jexcelRef.current) jexcelRef.current.destroy();
                 jexcelRef.current = jspreadsheet(containerRef.current, {
                     data: data,
                     columns: [
+                        { type: 'text', title: 'ID', width: 100, readOnly: true },
                         { type: 'text', title: 'タイトル', width: 250, readOnly: true },
                         { type: 'text', title: '種別', width: 100, readOnly: true },
                         { type: 'text', title: 'フォルダ', width: 120, readOnly: true },
@@ -1484,9 +1492,9 @@
                                         <div className="overflow-x-auto whitespace-nowrap text-sm font-medium" style={{ maxWidth: '100%' }} title={a.title}>
                                             {a.title}
                                         </div>
-                                        {searchMode === 'tag' && a.tags && a.tags.length > 0 && (
+                                        {searchMode === 'tag' && a.tags && safeArray(a.tags).length > 0 && (
                                             <div className="flex flex-wrap gap-1 mt-1">
-                                                {a.tags.map(tag => (
+                                                {safeArray(a.tags).map(tag => (
                                                     <span key={tag} className="text-[10px] bg-gray-100 text-gray-600 px-1 rounded">
                                                         #{tag}
                                                     </span>
@@ -1847,7 +1855,7 @@
                 if (!q && !minImportance) return base;
                 const matches = (a) => {
                     if (minImportance > 0 && (a.importance || 3) < minImportance) return false;
-                    const hay = [a.title || '', stripHtml(a.contentHtml || ''), (a.tags || []).join(' '), a.representedTag || ''].join(' ').toLowerCase();
+                    const hay = [a.title || '', stripHtml(a.contentHtml || ''), safeArray(a.tags).join(' '), a.representedTag || ''].join(' ').toLowerCase();
                     return hay.includes(q);
                 };
                 return base.filter(matches);
@@ -2045,7 +2053,7 @@
 
         const TagMiniTimeline = ({ tag, articles = [], onSelectArticle, isTreeMode = false, selectedArticleId, onTagClick }) => {
             if (!tag) return null;
-            const items = React.useMemo(() => sortByChronology(articles.filter(a => (a.tags || []).includes(tag))), [articles, tag]);
+            const items = React.useMemo(() => sortByChronology(articles.filter(a => safeArray(a.tags).includes(tag))), [articles, tag]);
 
             const displayItems = React.useMemo(() => {
                 if (!selectedArticleId || items.length === 0) return items.slice(0, 3);
@@ -2381,7 +2389,7 @@
                                                             <div className="w-full md:w-[320px] shrink-0 pl-0 md:pl-0 border-l-0 md:border-l border-white/30 py-4 relative">
                                                                 <div className="hidden md:block absolute left-[-1px] top-1/2 w-2 h-2 bg-white rounded-full -translate-y-1/2 -translate-x-1/2 shadow-[0_0_10px_white]"></div>
                                                                 <div className="mb-2 flex items-center gap-2 text-white/60 text-xs font-bold uppercase tracking-widest pl-8">関連マインドマップ</div>
-                                                                <TagTimelineColumns tags={article.tags} articles={allArticles} onSelectArticle={(item) => handleJump(item)} onTagClick={(t) => { isJumpingRef.current = true; if (onSearchChange) onSearchChange({ tag: t }); }} selectedArticleId={article.id} isTreeMode={true} variant="light" />
+                                                                <TagTimelineColumns tags={safeArray(article.tags)} articles={allArticles} onSelectArticle={(item) => handleJump(item)} onTagClick={(t) => { isJumpingRef.current = true; if (onSearchChange) onSearchChange({ tag: t }); }} selectedArticleId={article.id} isTreeMode={true} variant="light" />
                                                                 {article.stats && article.stats.length > 0 && (
                                                                     <div className="bg-white/5 rounded-xl p-4 border border-white/10 ml-8 mt-4"><div className="text-xs font-bold text-white/50 mb-2 border-b border-white/10 pb-1">STATS</div>{article.stats.map((s, i) => (<div key={i} className="flex justify-between text-sm text-white/80 py-1"><span>{s.label}</span><span className="font-bold font-mono text-indigo-300">{s.value}</span></div>))}</div>
                                                                 )}
@@ -2449,7 +2457,7 @@
 
         const collectAllTags = (articles = []) => {
             const set = new Set();
-            articles.forEach(a => (a.tags || []).forEach(t => t && set.add(t)));
+            articles.forEach(a => safeArray(a.tags).forEach(t => t && set.add(t)));
             return Array.from(set).sort((a, b) => a.localeCompare(b));
         };
 
@@ -2472,7 +2480,7 @@
             // filter by condition tags: if none selected include all, otherwise include articles that have ANY of the selectedTags
             const selected = articles.filter(a => {
                 if (!selectedTags || selectedTags.length === 0) return true;
-                const tags = (a.tags || []).map(t => String(t));
+                const tags = safeArray(a.tags).map(t => String(t));
                 return selectedTags.some(st => tags.includes(st));
             });
 
@@ -2498,7 +2506,7 @@
             const groups = new Map();
             const useGroupTags = Array.isArray(groupTags) && groupTags.length > 0;
             perArticle.forEach(({ article, year, map }) => {
-                const tags = (article.tags || []).map(t => String(t));
+                const tags = safeArray(article.tags).map(t => String(t));
                 if (useGroupTags) {
                     groupTags.forEach(gt => {
                         if (tags.includes(gt)) {
@@ -3246,7 +3254,7 @@
                     lng: article.lng || null
                 });
                 setStats(article.stats || []);
-                setTagInput((article.tags || []).join(', '));
+                setTagInput(safeArray(article.tags).join(', '));
                 setViewMode('edit');
             };
 
@@ -3345,7 +3353,7 @@
                     lng: duplicated.lng || null
                 });
                 setStats(duplicated.stats || []);
-                setTagInput((duplicated.tags || []).join(','));
+                setTagInput(safeArray(duplicated.tags).join(','));
                 setViewMode('edit');
             };
 
