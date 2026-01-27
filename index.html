@@ -371,6 +371,13 @@
 
         const stripHtml = (html = '') => html.replace(/<[^>]*>/g, ' ');
 
+        // 安全に配列として扱うためのユーティリティ
+        const safeArray = (val) => {
+            if (Array.isArray(val)) return val;
+            if (typeof val === 'string') return val.split(',').map(s => s.trim()).filter(Boolean);
+            return [];
+        };
+
         const escapeHtml = (str) => {
             if (!str) return '';
             return str.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -444,13 +451,13 @@
                         article.title,
                         article.folder,
                         stripHtml(article.contentHtml || ''),
-                        (article.tags || []).join(' '),
+                        safeArray(article.tags).join(' '),
                         article.representedTag || ''
                     ].join(' ').toLowerCase();
                     if (!haystack.includes(keyword)) return false;
                 }
                 if (tag) {
-                    const tags = (article.tags || []).map(t => t.toLowerCase());
+                    const tags = safeArray(article.tags).map(t => t.toLowerCase());
                     const rep = (article.representedTag || '').toLowerCase();
                     if (!tags.includes(tag) && rep !== tag) return false;
                 }
@@ -2436,7 +2443,7 @@
                 if (!q && !minImportance) return base;
                 const matches = (a) => {
                     if (minImportance > 0 && (a.importance || 3) < minImportance) return false;
-                    const hay = [a.title || '', stripHtml(a.contentHtml || ''), (a.tags || []).join(' '), a.representedTag || ''].join(' ').toLowerCase();
+                    const hay = [a.title || '', stripHtml(a.contentHtml || ''), safeArray(a.tags).join(' '), a.folder || '', a.representedTag || ''].join(' ').toLowerCase();
                     return hay.includes(q);
                 };
                 return base.filter(matches);
@@ -2654,7 +2661,7 @@
 
         const TagMiniTimeline = ({ tag, articles = [], onSelectArticle, isTreeMode = false, selectedArticleId, onTagClick }) => {
             if (!tag) return null;
-            const items = React.useMemo(() => sortByChronology(articles.filter(a => (a.tags || []).includes(tag))), [articles, tag]);
+            const items = React.useMemo(() => sortByChronology(articles.filter(a => safeArray(a.tags).includes(tag))), [articles, tag]);
 
             const displayItems = React.useMemo(() => {
                 if (!selectedArticleId || items.length === 0) return items.slice(0, 3);
@@ -2742,7 +2749,7 @@
             // フィルタリング
             const filtered = articles.filter(a => {
                 if (filters.type !== 'all' && a.type !== filters.type) return false;
-                if (filters.tag && !((a.tags || []).includes(filters.tag) || a.representedTag === filters.tag)) return false;
+                if (filters.tag && !(safeArray(a.tags).includes(filters.tag) || a.representedTag === filters.tag)) return false;
                 if (filters.keyword) {
                     const k = filters.keyword.toLowerCase();
                     return a.title.toLowerCase().includes(k) || (a.folder || '').toLowerCase().includes(k);
@@ -2804,7 +2811,7 @@
                     a.folder,
                     a.year || 0,
                     a.importance || 3,
-                    (a.tags || []).join(', '),
+                    safeArray(a.tags).join(', '),
                     a.isApproved ? 'Yes' : 'No'
                 ]);
 
@@ -3299,7 +3306,7 @@
 
         const collectAllTags = (articles = []) => {
             const set = new Set();
-            articles.forEach(a => (a.tags || []).forEach(t => t && set.add(t)));
+            articles.forEach(a => safeArray(a.tags).forEach(t => t && set.add(t)));
             return Array.from(set).sort((a, b) => a.localeCompare(b));
         };
 
@@ -3960,7 +3967,7 @@
                     if (a.id === article.id) return false;
                     if (a.folder === article.folder) return true;
                     if (article.tags && a.tags) {
-                        return article.tags.some(tag => a.tags.includes(tag));
+                        return safeArray(article.tags).some(tag => safeArray(a.tags).includes(tag));
                     }
                     return false;
                 }).slice(0, 10);
@@ -4110,16 +4117,16 @@
                                             <span>{article.dateStr}</span>
                                         </div>
                                     )}
-                                    {article.locations && article.locations.length > 0 && (
+                                    {article.locations && safeArray(article.locations).length > 0 && (
                                         <div className="flex items-center gap-1">
                                             <Icon name="map-pin" size={14} />
-                                            <span>{article.locations.join(', ')}</span>
+                                            <span>{safeArray(article.locations).join(', ')}</span>
                                         </div>
                                     )}
-                                    {article.tags && article.tags.length > 0 && (
+                                    {article.tags && safeArray(article.tags).length > 0 && (
                                         <div className="flex items-center gap-1">
                                             <Icon name="tag" size={14} />
-                                            <span>{article.tags.join(', ')}</span>
+                                            <span>{safeArray(article.tags).join(', ')}</span>
                                         </div>
                                     )}
                                 </div>
@@ -4860,7 +4867,7 @@
                     lng: article.lng || null
                 });
                 setStats(article.stats || []);
-                setTagInput((article.tags || []).join(', '));
+                setTagInput(safeArray(article.tags).join(', '));
                 setViewMode('edit');
             };
 
@@ -5021,7 +5028,7 @@
                     lng: duplicated.lng || null
                 });
                 setStats(duplicated.stats || []);
-                setTagInput((duplicated.tags || []).join(','));
+                setTagInput(safeArray(duplicated.tags).join(','));
                 setViewMode('edit');
             };
 
