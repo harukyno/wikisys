@@ -3436,6 +3436,14 @@
                     <div className="flex-1 flex flex-col relative h-full overflow-hidden">
                         <header className="bg-white shadow-sm px-4 py-2 flex items-center justify-between z-10 border-b">
                             <div className="flex items-center gap-4">
+                                {worldData?.mainPageId && (
+                                    <button onClick={() => {
+                                        const mainArt = articles.find(a => a.id === worldData.mainPageId);
+                                        if (mainArt) { setSelectedArticle(mainArt); setViewMode('single_article'); }
+                                    }} className="p-2 -ml-2 text-indigo-600 hover:text-indigo-800 rounded-full hover:bg-indigo-50 transition-colors" title="メインページ">
+                                        <Icon name="landmark" size={20} />
+                                    </button>
+                                )}
                                 <div className="hidden md:flex flex-col text-xs text-gray-500">
                                     <span className="text-sm font-bold text-gray-800">{worldData?.name}</span>
                                     <span className="text-[11px] cursor-pointer hover:text-indigo-600" onClick={copyMyId} title="IDコピー">{user?.displayName} (ID)</span>

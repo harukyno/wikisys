@@ -5111,6 +5111,14 @@
                                 <button onClick={() => { setWorldId(null); setViewMode('world_select'); }} className="p-2 -ml-2 text-gray-400 hover:text-indigo-600 rounded-full hover:bg-gray-100 transition-colors" title="メニューに戻る">
                                     <Icon name="home" size={20} />
                                 </button>
+                                {worldData?.mainPageId && (
+                                    <button onClick={() => {
+                                        const mainArt = articles.find(a => a.id === worldData.mainPageId);
+                                        if (mainArt) { setSelectedArticle(mainArt); setViewMode('single_article'); }
+                                    }} className="p-2 -ml-2 text-indigo-600 hover:text-indigo-800 rounded-full hover:bg-indigo-50 transition-colors" title="メインページ">
+                                        <Icon name="landmark" size={20} />
+                                    </button>
+                                )}
                                 <div className="hidden md:flex flex-col text-xs text-gray-500">
                                     <span className="text-sm font-bold text-gray-800">{worldData?.name}</span>
                                     <div className="flex items-center gap-2">
