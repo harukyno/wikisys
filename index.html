@@ -4229,6 +4229,20 @@
             const [navBackView, setNavBackView] = React.useState('timeline_large'); // 記事詳細から戻る際のビューモード
             const isRestoringFromURL = React.useRef(false);
             const hasCheckedWorldURL = React.useRef(false); // URL復元中のフラグ
+            const hasRedirectedToMain = React.useRef(false);
+
+            const handleSetMainPage = async (articleId) => {
+                if (!['owner', 'admin'].includes(myRole)) return;
+                const { updateDoc, doc } = window.firebaseModules;
+                const isCurrentlyMain = worldData?.mainPageId === articleId;
+                const targetId = isCurrentlyMain ? '' : articleId;
+                try {
+                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), {
+                        mainPageId: targetId
+                    });
+                    alert(targetId ? "メインページに設定しました" : "メインページ設定を解除しました");
+                } catch (e) { alert("設定失敗: " + e.message); }
+            };
 
             // Wiki閲覧履歴管理
             const [wikiHistory, setWikiHistory] = React.useState([]);
@@ -4379,6 +4393,23 @@
                     isRestoringFromURL.current = true;
                 }
             }, [user, worldId, articles]);
+
+            React.useEffect(() => {
+                if (!hasRedirectedToMain.current && worldData?.mainPageId && articles.length > 0 && viewMode === 'timeline_large') {
+                    const params = new URLSearchParams(window.location.search);
+                    if (!params.get('view') && !params.get('article') && !params.get('tag') && !params.get('keyword')) {
+                        const mainArt = articles.find(a => a.id === worldData.mainPageId);
+                        if (mainArt) {
+                            hasRedirectedToMain.current = true;
+                            setSelectedArticle(mainArt);
+                            setViewMode('single_article');
+                            console.log('Redirecting to main page:', mainArt.title);
+                        }
+                    } else {
+                        hasRedirectedToMain.current = true;
+                    }
+                }
+            }, [worldData, articles, viewMode]);
 
             // 状態が変更されたらURLを更新（ブラウザの履歴に追加）
             React.useEffect(() => {
@@ -5269,6 +5300,15 @@
                                         <div className="flex gap-2">
                                             {isEditor && (
                                                 <>
+                                                    {(myRole === 'owner' || myRole === 'admin') && (
+                                                        <button
+                                                            onClick={() => handleSetMainPage(selectedArticle.id)}
+                                                            className={`px-4 py-1.5 rounded text-sm font-bold shadow-sm flex items-center gap-1 transition-colors ${worldData?.mainPageId === selectedArticle.id ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100'}`}
+                                                        >
+                                                            <Icon name="star" size={14} />
+                                                            {worldData?.mainPageId === selectedArticle.id ? 'メイン解除' : 'メイン設定'}
+                                                        </button>
+                                                    )}
                                                     <button onClick={() => startEditingArticle(selectedArticle)} className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-bold rounded shadow-sm hover:bg-indigo-700">編集</button>
                                                     <button onClick={() => handleDuplicateArticle(selectedArticle)} className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-bold rounded shadow-sm hover:bg-emerald-700">複製</button>
                                                 </>
@@ -5628,6 +5668,18 @@
                                                     <button onClick={handleReapplyRegionTags} className="px-3 py-1.5 bg-gray-500 text-white rounded text-sm hover:bg-gray-600" title="現在のルールに基づいてタグを再計算・追加します">再適用</button>
                                                     <button onClick={() => { setShowRegionRuleEditor(true); setShowAdminPanel(false); }} className="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm">編集</button>
                                                 </div>
+                                            </div>
+                                            <div className="flex items-center justify-between pt-4 border-t">
+                                                <div>
+                                                    <div className="text-sm font-bold">メインページ設定</div>
+                                                    <div className="text-xs text-gray-500">
+                                                        {worldData?.mainPageId ? `現在: ${articles.find(a => a.id === worldData.mainPageId)?.title || worldData.mainPageId}` : '未設定'}
+                                                    </div>
+                                                </div>
+                                                <button onClick={() => {
+                                                    const pageId = prompt('メインページにする記事IDを入力してください（解除する場合は空欄）:', worldData?.mainPageId || '');
+                                                    if (pageId !== null) handleSetMainPage(pageId);
+                                                }} className="px-3 py-1.5 bg-indigo-500 text-white rounded text-sm">設定</button>
                                             </div>
                                             <div className="flex items-center justify-between pt-4 border-t">
                                                 <div>
