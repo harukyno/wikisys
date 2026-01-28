@@ -1447,12 +1447,12 @@
                 if (searchMode === 'tag') {
                     // タグ検索: 記事のタグ配列に部分一致するタグが含まれているかチェック
                     return articles.filter(a =>
-                        a.tags && a.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
+                        a.tags && a.tags.some(tag => tag && tag.toLowerCase().includes(lowerQuery))
                     );
                 } else {
                     // 記事名検索
                     return articles.filter(a =>
-                        a.title.toLowerCase().includes(lowerQuery)
+                        (a.title || '').toLowerCase().includes(lowerQuery)
                     );
                 }
             }, [articles, query, searchMode]);
@@ -1908,7 +1908,7 @@
                         const color = highlighted ? '#10b981' : '#3b82f6';
                         const marker = L.circleMarker([loc.lat, loc.lng], { color, fillColor: color, fillOpacity: highlighted ? 0.9 : 0.6, radius: highlighted ? 14 : 8, weight: 2 })
                             .addTo(leafletMap.current)
-                            .bindTooltip(loc.label || article.title, { permanent: true, direction: 'top', className: 'map-label' });
+                            .bindTooltip(loc.label && loc.label !== article.title ? `${loc.label} (${article.title})` : (loc.label || article.title), { permanent: true, direction: 'top', className: 'map-label' });
 
                         if (onSelectArticle) {
                             marker.on('click', () => onSelectArticle(article));
