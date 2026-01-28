@@ -1743,7 +1743,7 @@
                                         {article.title}
                                     </h3>
                                     <div className="text-sm text-slate-300 mb-4 leading-relaxed" onClick={handleContentClick} dangerouslySetInnerHTML={{ __html: transformContent(article.contentHtml || '') }}></div>
-                                    <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{article.tags?.map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
+                                    <div className="flex flex-wrap gap-1 pt-3 border-t border-slate-700">{safeArray(article.tags).map(tag => <span key={tag} className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">#{tag}</span>)}</div>
                                 </div>
                             ))}
                         </div>
