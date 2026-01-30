@@ -578,6 +578,7 @@
                 const url = argList[0] || '';
                 if (!url) return '<div class="p-4 bg-red-50 text-red-500 text-xs">GoogleスプレッドシートのURLを指定してください</div>';
 
+                let embedUrl = url;
                 if (url.includes('docs.google.com/spreadsheets')) {
                     // /edit, /view, /preview, /pub などが含まれる場合、
                     // 共有設定（リンクを知っている全員）だけで表示可能な /preview に変換します
