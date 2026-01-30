@@ -578,15 +578,22 @@
                 const url = argList[0] || '';
                 if (!url) return '<div class="p-4 bg-red-50 text-red-500 text-xs">GoogleスプレッドシートのURLを指定してください</div>';
 
-                // URL互換性向上ロジック: さまざまな共有形式を埋め込み用(pubhtml)に変換
+                // URL互換性向上ロジック
                 let embedUrl = url;
                 if (url.includes('docs.google.com/spreadsheets')) {
-                    // /edit, /view, /preview, /pub などが含まれる場合、すべて pubhtml?widget=true に統一
-                    embedUrl = url.replace(/\/(edit|view|preview|pub|htmlview)(.*)$/, '/pubhtml?widget=true&headers=false');
-                    // 既に pubhtml っぽいがパラメータがない場合も補完
-                    if (!embedUrl.includes('pubhtml')) {
-                        const mid = url.match(/\/d\/([^\/]+)/);
-                        if (mid) embedUrl = `https://docs.google.com/spreadsheets/d/${mid[1]}/pubhtml?widget=true&headers=false`;
+                    // 明示的に pubhtml (Web公開) が指定されている場合は維持
+                    if (url.includes('/pubhtml')) {
+                        // パラメータ調整は行わず、ユーザー指定のURLを尊重（必要なら手動で付与してもらう）
+                    } else {
+                        // それ以外 (edit, view, preview 等) は /preview に統一して埋め込む
+                        // これにより "リンクを知っている全員" 権限で閲覧可能になる (Web公開設定が不要)
+                        if (url.match(/\/(edit|view|preview|pub|htmlview)/)) {
+                            embedUrl = url.replace(/\/(edit|view|preview|pub|htmlview)(.*)$/, '/preview');
+                        } else {
+                            // IDのみで終わっている場合などの補完
+                            const mid = url.match(/\/d\/([^\/]+)/);
+                            if (mid) embedUrl = `https://docs.google.com/spreadsheets/d/${mid[1]}/preview`;
+                        }
                     }
                 }
 
