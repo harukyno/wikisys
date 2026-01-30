@@ -705,15 +705,18 @@
                 const url = argList[0] || '';
                 if (!url) return '<div class="p-4 bg-red-50 text-red-500 text-xs">GoogleスプレッドシートのURLを指定してください</div>';
 
-                // URL互換性向上ロジック
-                let embedUrl = url;
                 if (url.includes('docs.google.com/spreadsheets')) {
-                    // /edit, /view, /preview, /pub などが含まれる場合、すべて pubhtml?widget=true に統一
-                    embedUrl = url.replace(/\/(edit|view|preview|pub|htmlview)(.*)$/, '/pubhtml?widget=true&headers=false');
-                    // 既に pubhtml っぽいがパラメータがない場合も補完
-                    if (!embedUrl.includes('pubhtml')) {
-                        const mid = url.match(/\/d\/([^\/]+)/);
-                        if (mid) embedUrl = `https://docs.google.com/spreadsheets/d/${mid[1]}/pubhtml?widget=true&headers=false`;
+                    // /edit, /view, /preview, /pub などが含まれる場合、
+                    // 共有設定（リンクを知っている全員）だけで表示可能な /preview に変換します
+                    if (!url.includes('/pubhtml')) {
+                        embedUrl = url.replace(/\/(edit|view|preview|pub|htmlview)(.*)$/, '/preview$2');
+                        if (!embedUrl.includes('/preview')) {
+                            const mid = url.match(/\/d\/([^\/]+)/);
+                            if (mid) embedUrl = `https://docs.google.com/spreadsheets/d/${mid[1]}/preview`;
+                        }
+                    } else if (!url.includes('widget=')) {
+                        // すでに pubhtml の場合はパラメータを補完
+                        embedUrl += (embedUrl.includes('?') ? '&' : '?') + 'widget=true&headers=false';
                     }
                 }
 
