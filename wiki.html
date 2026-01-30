@@ -2455,6 +2455,50 @@
             } catch (e) { return {}; }
         };
 
+        const fetchSpreadsheetData = async (spreadsheetId, gid, range) => {
+            if (!spreadsheetId) return null;
+            const sheetId = gid || '0';
+            const rangeParam = range ? `&range=${encodeURIComponent(range)}` : '';
+            const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheetId}${rangeParam}`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+                const csvText = await response.text();
+                return parseCSV(csvText, ',');
+            } catch (err) {
+                console.error("Spreadsheet Fetch Error:", err);
+                alert("スプレッドシートの取得に失敗しました。公開設定を確認してください。");
+                return null;
+            }
+        };
+
+        const parseSpreadsheetCSVToSeries = (rows) => {
+            if (!rows || rows.length < 2) return [];
+            const header = rows[0];
+            const seriesMap = {};
+
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                const year = parseInt(row[0]);
+                if (isNaN(year)) continue;
+
+                for (let j = 1; j < row.length; j++) {
+                    const seriesName = header[j] || `Series ${j}`;
+                    const val = parseFloat((row[j] || '').replace(/[,\s]/g, ''));
+                    if (!isNaN(val)) {
+                        if (!seriesMap[seriesName]) seriesMap[seriesName] = [];
+                        seriesMap[seriesName].push({ year, value: val });
+                    }
+                }
+            }
+
+            return Object.entries(seriesMap).map(([key, points]) => ({
+                key,
+                points: points.sort((a, b) => a.year - b.year)
+            }));
+        };
+
         const collectAllTags = (articles = []) => {
             const set = new Set();
             articles.forEach(a => safeArray(a.tags).forEach(t => t && set.add(t)));
@@ -2604,68 +2648,248 @@
             );
         };
 
-        const GraphView = ({ setView, articles = [] }) => {
-            const [conditionTags, setConditionTags] = React.useState([]); // 条件タグ（複数）
-            const [elementTags, setElementTags] = React.useState([]); // 要素タグ（複数選択）
+        const GraphView = ({ setView, articles = [], worldData, worldId, appContextId, db, canIApprove }) => {
+            const [dataSource, setDataSource] = React.useState('article'); // 'article' | 'spreadsheet'
+            const [conditionTags, setConditionTags] = React.useState([]);
+            const [elementTags, setElementTags] = React.useState([]);
             const [statusA, setStatusA] = React.useState('');
             const [statusB, setStatusB] = React.useState('');
             const [op, setOp] = React.useState('+');
             const [series, setSeries] = React.useState([]);
+            const [loading, setLoading] = React.useState(false);
+
+            // Spreadsheet Config
+            const [config, setConfig] = React.useState(worldData?.statsConfig || { spreadsheetId: '', gid: '0', range: '' });
+            const [showConfig, setShowConfig] = React.useState(false);
+
             const tags = collectAllTags(articles);
             const statuses = collectAllStatusLabels(articles);
 
             const toggleConditionTag = (t) => setConditionTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
             const toggleElementTag = (t) => setElementTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
-            const runAggregate = () => {
-                if (!statusA && !statusB) { alert('少なくとも1つの統計ステータスを選択してください'); return; }
-                const s = aggregateSeriesByGroup(articles, conditionTags, elementTags, statusA, statusB, op);
-                setSeries(s);
+            const runAggregate = async () => {
+                if (dataSource === 'article') {
+                    if (!statusA && !statusB) { alert('少なくとも1つの統計ステータスを選択してください'); return; }
+                    const s = aggregateSeriesByGroup(articles, conditionTags, elementTags, statusA, statusB, op);
+                    setSeries(s);
+                } else {
+                    if (!config.spreadsheetId) { alert('スプレッドシートIDを設定してください'); return; }
+                    setLoading(true);
+                    try {
+                        const rows = await fetchSpreadsheetData(config.spreadsheetId, config.gid, config.range);
+                        if (rows) {
+                            const s = parseSpreadsheetCSVToSeries(rows);
+                            setSeries(s);
+                        }
+                    } finally {
+                        setLoading(false);
+                    }
+                }
+            };
+
+            const handleSaveConfig = async () => {
+                if (!canIApprove) return;
+                const { updateDoc, doc } = window.firebaseModules;
+                try {
+                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), {
+                        statsConfig: config
+                    });
+                    alert('設定を保存しました');
+                    setShowConfig(false);
+                } catch (e) { alert("保存失敗: " + e.message); }
             };
 
             return (
                 <div className="space-y-6 p-6 animate-[fadeIn_0.2s_ease-out]">
-                    <div className="flex items-center gap-4"><button onClick={() => setView('timeline_large')} className="flex items-center gap-2 px-3 py-2 bg-white text-gray-700 rounded border"><Icon name="arrow-left" size={16} /> 年表へ戻る</button><h2 className="text-xl font-bold">統計ビュー</h2></div>
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <button onClick={() => setView('timeline_large')} className="flex items-center gap-2 px-3 py-2 bg-white text-gray-700 rounded border shadow-sm hover:bg-gray-50 transition-colors">
+                                <Icon name="arrow-left" size={16} /> 年表へ戻る
+                            </button>
+                            <h2 className="text-xl font-bold flex items-center gap-2">
+                                <Icon name="bar-chart-2" className="text-indigo-600" /> 統計ビュー
+                            </h2>
+                        </div>
 
-                    <div className="bg-white p-4 rounded shadow grid grid-cols-3 gap-4">
-                        <div className="col-span-3">
-                            <div className="text-sm font-bold mb-2">条件タグ（これらのタグを持つ記事が集計対象になります。複数選択可）</div>
-                            <div className="flex flex-wrap gap-2">{tags.map(t => (<button key={t} onClick={() => toggleConditionTag(t)} className={`px-2 py-1 text-sm rounded ${conditionTags.includes(t) ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'}`}>#{t}</button>))}</div>
-                        </div>
-                        <div className="col-span-3">
-                            <div className="text-sm font-bold mb-2">要素タグ（これらを同一要素として扱い比較します。複数選択可）</div>
-                            <div className="flex flex-wrap gap-2">{tags.map(t => (<button key={t} onClick={() => toggleElementTag(t)} className={`px-2 py-1 text-sm rounded ${elementTags.includes(t) ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700'}`}>#{t}</button>))}</div>
-                        </div>
-                        <div>
-                            <div className="text-sm font-bold mb-2">統計ステータス A</div>
-                            <select className="w-full border p-2 rounded" value={statusA} onChange={e => setStatusA(e.target.value)}>
-                                <option value="">-- 選択しない --</option>
-                                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-                            </select>
-                        </div>
-                        <div>
-                            <div className="text-sm font-bold mb-2">統計ステータス B</div>
-                            <select className="w-full border p-2 rounded" value={statusB} onChange={e => setStatusB(e.target.value)}>
-                                <option value="">-- 選択しない --</option>
-                                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-                            </select>
-                        </div>
-                        <div>
-                            <div className="text-sm font-bold mb-2">演算子 (A op B)</div>
-                            <select className="w-full border p-2 rounded" value={op} onChange={e => setOp(e.target.value)}>
-                                <option value="+">+</option>
-                                <option value="-">-</option>
-                                <option value="*">×</option>
-                                <option value="/">÷</option>
-                            </select>
+                        <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
+                            <button
+                                onClick={() => setDataSource('article')}
+                                className={`px-3 py-1.5 text-sm font-bold rounded-md transition-all ${dataSource === 'article' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                記事データ
+                            </button>
+                            <button
+                                onClick={() => setDataSource('spreadsheet')}
+                                className={`px-3 py-1.5 text-sm font-bold rounded-md transition-all ${dataSource === 'spreadsheet' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                スプレッドシート
+                            </button>
+                            {canIApprove && dataSource === 'spreadsheet' && (
+                                <button
+                                    onClick={() => setShowConfig(!showConfig)}
+                                    className="p-1.5 text-gray-500 hover:bg-white hover:text-gray-700 rounded-md transition-all"
+                                    title="設定"
+                                >
+                                    <Icon name="settings" size={18} />
+                                </button>
+                            )}
                         </div>
                     </div>
 
-                    <div className="flex gap-2"><button onClick={runAggregate} className="px-4 py-2 bg-indigo-600 text-white rounded font-bold">グラフ生成</button><button onClick={() => { setConditionTags([]); setElementTag(''); setStatusA(''); setStatusB(''); setOp('+'); setSeries([]); }} className="px-4 py-2 border rounded">リセット</button></div>
+                    {dataSource === 'spreadsheet' && showConfig && canIApprove && (
+                        <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-lg shadow-inner space-y-4 animate-[slideDown_0.2s_ease-out]">
+                            <div className="text-sm font-bold text-emerald-800 flex items-center gap-2">
+                                <Icon name="settings" size={16} /> スプレッドシート連携設定
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 block mb-1">スプレッドシートID</label>
+                                    <input
+                                        className="w-full border p-2 rounded text-sm"
+                                        value={config.spreadsheetId}
+                                        onChange={e => setConfig(prev => ({ ...prev, spreadsheetId: e.target.value }))}
+                                        placeholder="例: 1abc...XYZ"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 block mb-1">シートID (gid)</label>
+                                    <input
+                                        className="w-full border p-2 rounded text-sm"
+                                        value={config.gid}
+                                        onChange={e => setConfig(prev => ({ ...prev, gid: e.target.value }))}
+                                        placeholder="例: 0"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 block mb-1">範囲指定 (range)</label>
+                                    <input
+                                        className="w-full border p-2 rounded text-sm"
+                                        value={config.range}
+                                        onChange={e => setConfig(prev => ({ ...prev, range: e.target.value }))}
+                                        placeholder="例: A1:F50"
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex justify-end gap-2">
+                                <button onClick={() => setShowConfig(false)} className="px-3 py-1.5 text-sm text-gray-500 font-bold hover:bg-white/50 rounded transition-colors">キャンセル</button>
+                                <button onClick={handleSaveConfig} className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm">設定を保存</button>
+                            </div>
+                        </div>
+                    )}
 
-                    <div>
+                    {dataSource === 'article' ? (
+                        <div className="bg-white p-4 rounded shadow grid grid-cols-1 md:grid-cols-3 gap-4 border border-gray-100">
+                            <div className="col-span-1 md:col-span-3">
+                                <div className="text-sm font-bold mb-2 flex items-center gap-2 text-gray-700">
+                                    <Icon name="tag" size={14} className="text-indigo-500" /> 条件タグ
+                                    <span className="text-[10px] font-normal text-gray-400">（これらのタグを持つ記事が集計対象になります。複数選択可）</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {tags.map(t => (
+                                        <button
+                                            key={t}
+                                            onClick={() => toggleConditionTag(t)}
+                                            className={`px-2.5 py-1 text-xs rounded-full font-bold transition-all ${conditionTags.includes(t) ? 'bg-indigo-600 text-white shadow-sm' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
+                                        >
+                                            #{t}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="col-span-1 md:col-span-3">
+                                <div className="text-sm font-bold mb-2 flex items-center gap-2 text-gray-700">
+                                    <Icon name="tags" size={14} className="text-indigo-500" /> 要素タグ
+                                    <span className="text-[10px] font-normal text-gray-400">（これらを同一要素として扱い比較します。複数選択可）</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {tags.map(t => (
+                                        <button
+                                            key={t}
+                                            onClick={() => toggleElementTag(t)}
+                                            className={`px-2.5 py-1 text-xs rounded-full font-bold transition-all ${elementTags.includes(t) ? 'bg-indigo-600 text-white shadow-sm' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
+                                        >
+                                            #{t}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="text-xs font-bold text-gray-500">統計ステータス A</div>
+                                <select className="w-full border p-2 rounded text-sm bg-gray-50" value={statusA} onChange={e => setStatusA(e.target.value)}>
+                                    <option value="">-- 未選択 --</option>
+                                    {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="text-xs font-bold text-gray-500">統計ステータス B</div>
+                                <select className="w-full border p-2 rounded text-sm bg-gray-50" value={statusB} onChange={e => setStatusB(e.target.value)}>
+                                    <option value="">-- 未選択 --</option>
+                                    {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="text-xs font-bold text-gray-500">演算子 (A op B)</div>
+                                <select className="w-full border p-2 rounded text-sm bg-gray-50" value={op} onChange={e => setOp(e.target.value)}>
+                                    <option value="+">A + B</option>
+                                    <option value="-">A - B</option>
+                                    <option value="*">A × B</option>
+                                    <option value="/">A ÷ B</option>
+                                </select>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="bg-white p-6 rounded shadow border border-emerald-100 flex flex-col items-center justify-center min-h-[160px] text-center space-y-4">
+                            {!config.spreadsheetId ? (
+                                <div className="space-y-2">
+                                    <div className="text-gray-400 italic">スプレッドシートが設定されていません。</div>
+                                    {canIApprove && (
+                                        <button onClick={() => setShowConfig(true)} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold text-sm shadow hover:bg-emerald-700 transition-colors">設定を開く</button>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    <div className="text-emerald-700 font-bold flex items-center justify-center gap-2">
+                                        <Icon name="link" size={16} /> 外部スプレッドシート連携
+                                    </div>
+                                    <div className="text-xs text-gray-500">
+                                        ID: <span className="font-mono">{config.spreadsheetId.slice(0, 8)}...{config.spreadsheetId.slice(-4)}</span> /
+                                        範囲: <span className="font-mono">{config.range || '全体'}</span>
+                                    </div>
+                                    <div className="text-xs text-amber-600 bg-amber-50 px-3 py-1 rounded inline-block">
+                                        ※1列目に年代(数値)、2列目以降に集計値を配置したデータを使用します
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    <div className="flex gap-3">
+                        <button
+                            onClick={runAggregate}
+                            disabled={loading}
+                            className={`px-6 py-2.5 rounded font-bold text-white shadow-md transition-all flex items-center gap-2 ${loading ? 'bg-gray-400' : (dataSource === 'article' ? 'bg-indigo-600 hover:bg-indigo-700 hover:-translate-y-0.5' : 'bg-emerald-600 hover:bg-emerald-700 hover:-translate-y-0.5')}`}
+                        >
+                            {loading ? <Icon name="loader" size={18} className="animate-spin" /> : <Icon name="play" size={18} />}
+                            解析を実行
+                        </button>
+                        <button
+                            onClick={() => { setConditionTags([]); setElementTags([]); setStatusA(''); setStatusB(''); setOp('+'); setSeries([]); }}
+                            className="px-4 py-2 border rounded font-bold text-gray-500 hover:bg-gray-50 transition-colors"
+                        >
+                            リセット
+                        </button>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-xl shadow-inner border border-gray-100">
                         <SimpleLineChart series={series} />
-                        {series.length === 0 && <div className="text-sm text-gray-500 mt-2">記事の時間を X 軸（記事の年代）として、選択した統計ステータスを記事単位で集計します。記事内のテーブルや `stats` のラベルをステータス名として扱います。</div>}
+                        {series.length === 0 && (
+                            <div className="text-sm text-gray-500 mt-4 p-8 border-2 border-dashed border-gray-100 rounded-lg text-center bg-gray-50/50">
+                                {dataSource === 'article'
+                                    ? "条件を選択して「解析を実行」ボタンを押すと、各記事の年代を X 軸としてステータスを集計したグラフが表示されます。"
+                                    : "外部スプレッドシートから取得した時系列データが表示されます。1列目の数値を年代として扱い、各列を独立した系列として描画します。"}
+                            </div>
+                        )}
                     </div>
                 </div>
             );
@@ -3493,7 +3717,7 @@
                                 }} appContextId={appContextId} /></div>
                             </div>}
                             {viewMode === 'timeline_large' && <LargeTimelineView articles={filteredTimelineArticles} onSelectArticle={setSelectedArticle} onEditArticle={startEditingArticle} onDeleteArticle={handleDeleteArticle} onDuplicateArticle={handleDuplicateArticle} focusedArticle={selectedArticle} onFocusChange={setSelectedArticle} allArticles={articles} searchState={timelineFilters} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true })} worldData={worldData} appContextId={appContextId} myRole={myRole} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { setSelectedArticle(art); setViewMode('single_article'); } } else { setViewMode('timeline_noyear'); } }} onOpenTagArticle={openTagArticle} tagArticleValue={tagArticleInput} onTagArticleValueChange={setTagArticleInput} />}
-                            {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} />}
+                            {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} worldData={worldData} worldId={worldId} appContextId={appContextId} db={db} canIApprove={canIApprove} />}
                             {viewMode === 'spreadsheet' && <LargeSpreadsheetView articles={articles} filters={timelineFilters} />}
                             {viewMode === 'timeline_noyear' && (
                                 <div className="absolute inset-0 overflow-auto p-6 bg-slate-900">
