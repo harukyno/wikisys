@@ -2459,7 +2459,8 @@
             if (!spreadsheetId) return null;
             const sheetId = gid || '0';
             const rangeParam = range ? `&range=${encodeURIComponent(range)}` : '';
-            const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheetId}${rangeParam}`;
+            // /export?format=csv よりも /gviz/tq?tqx=out:csv の方が公開設定等に対して堅牢な傾向があります
+            const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${sheetId}${rangeParam}`;
 
             try {
                 const response = await fetch(url);
@@ -2468,24 +2469,60 @@
                 return parseCSV(csvText, ',');
             } catch (err) {
                 console.error("Spreadsheet Fetch Error:", err);
-                alert("スプレッドシートの取得に失敗しました。公開設定を確認してください。");
+                // 失敗した場合は従来の /export URL を試行するフォールバック
+                const fallbackUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheetId}${rangeParam}`;
+                try {
+                    const res2 = await fetch(fallbackUrl);
+                    if (res2.ok) return parseCSV(await res2.text(), ',');
+                } catch (e) { }
+
+                alert("スプレッドシートの取得に失敗しました。公開設定（リンクを知っている全員）を確認してください。");
                 return null;
             }
         };
 
         const parseSpreadsheetCSVToSeries = (rows) => {
-            if (!rows || rows.length < 2) return [];
-            const header = rows[0];
+            if (!rows || rows.length < 1) return [];
+
+            // 1) ヘッダ行と「年代」列を特定する
+            let yearCol = -1;
+            let headerRowIndex = -1;
+            const yearRegex = /記録年|年代|年份|Year|Time|Date/i;
+
+            for (let i = 0; i < Math.min(rows.length, 20); i++) {
+                const row = rows[i];
+                const idx = row.findIndex(cell => cell && yearRegex.test(String(cell)));
+                if (idx !== -1) {
+                    yearCol = idx;
+                    headerRowIndex = i;
+                    break;
+                }
+            }
+
+            // 見つからない場合は 0列目 を年代と仮定
+            if (yearCol === -1) {
+                yearCol = 0;
+                headerRowIndex = 0;
+            }
+
+            const header = rows[headerRowIndex];
             const seriesMap = {};
 
-            for (let i = 1; i < rows.length; i++) {
+            // 2) データの抽出 (ヘッダ行以降をスキャン)
+            for (let i = headerRowIndex + 1; i < rows.length; i++) {
                 const row = rows[i];
-                const year = parseInt(row[0]);
+                if (!row[yearCol]) continue;
+
+                const year = parseInt(String(row[yearCol]).replace(/[,\s]/g, ''));
                 if (isNaN(year)) continue;
 
-                for (let j = 1; j < row.length; j++) {
-                    const seriesName = header[j] || `Series ${j}`;
-                    const val = parseFloat((row[j] || '').replace(/[,\s]/g, ''));
+                for (let j = 0; j < row.length; j++) {
+                    if (j === yearCol) continue;
+                    const seriesName = (header[j] || `Series ${j}`).trim();
+                    if (!seriesName) continue;
+
+                    const valRaw = String(row[j] || '').replace(/[,\s]/g, '');
+                    const val = parseFloat(valRaw);
                     if (!isNaN(val)) {
                         if (!seriesMap[seriesName]) seriesMap[seriesName] = [];
                         seriesMap[seriesName].push({ year, value: val });
@@ -2679,223 +2716,233 @@
                     try {
                         const rows = await fetchSpreadsheetData(config.spreadsheetId, config.gid, config.range);
                         if (rows) {
-                            const s = parseSpreadsheetCSVToSeries(rows);
+                            let s = parseSpreadsheetCSVToSeries(rows);
+                            // UIで選択されているステータスがあればフィルタリングする
+                            if (statusA || statusB) {
+                                s = s.filter(series => {
+                                    const k = series.key.toLowerCase();
+                                    const a = (statusA || '').toLowerCase();
+                                    const b = (statusB || '').toLowerCase();
+                                    return (a && k.includes(a)) || (b && k.includes(b));
+                                });
+                            }
                             setSeries(s);
                         }
-                    } finally {
-                        setLoading(false);
                     }
+                    } finally {
+                    setLoading(false);
                 }
-            };
+            }
+        };
 
-            const handleSaveConfig = async () => {
-                if (!canIApprove) return;
-                const { updateDoc, doc } = window.firebaseModules;
-                try {
-                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), {
-                        statsConfig: config
-                    });
-                    alert('設定を保存しました');
-                    setShowConfig(false);
-                } catch (e) { alert("保存失敗: " + e.message); }
-            };
+        const handleSaveConfig = async () => {
+            if (!canIApprove) return;
+            const { updateDoc, doc } = window.firebaseModules;
+            try {
+                await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), {
+                    statsConfig: config
+                });
+                alert('設定を保存しました');
+                setShowConfig(false);
+            } catch (e) { alert("保存失敗: " + e.message); }
+        };
 
-            return (
-                <div className="space-y-6 p-6 animate-[fadeIn_0.2s_ease-out]">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <button onClick={() => setView('timeline_large')} className="flex items-center gap-2 px-3 py-2 bg-white text-gray-700 rounded border shadow-sm hover:bg-gray-50 transition-colors">
-                                <Icon name="arrow-left" size={16} /> 年表へ戻る
-                            </button>
-                            <h2 className="text-xl font-bold flex items-center gap-2">
-                                <Icon name="bar-chart-2" className="text-indigo-600" /> 統計ビュー
-                            </h2>
-                        </div>
-
-                        <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
-                            <button
-                                onClick={() => setDataSource('article')}
-                                className={`px-3 py-1.5 text-sm font-bold rounded-md transition-all ${dataSource === 'article' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                記事データ
-                            </button>
-                            <button
-                                onClick={() => setDataSource('spreadsheet')}
-                                className={`px-3 py-1.5 text-sm font-bold rounded-md transition-all ${dataSource === 'spreadsheet' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                スプレッドシート
-                            </button>
-                            {canIApprove && dataSource === 'spreadsheet' && (
-                                <button
-                                    onClick={() => setShowConfig(!showConfig)}
-                                    className="p-1.5 text-gray-500 hover:bg-white hover:text-gray-700 rounded-md transition-all"
-                                    title="設定"
-                                >
-                                    <Icon name="settings" size={18} />
-                                </button>
-                            )}
-                        </div>
+        return (
+            <div className="space-y-6 p-6 animate-[fadeIn_0.2s_ease-out]">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                        <button onClick={() => setView('timeline_large')} className="flex items-center gap-2 px-3 py-2 bg-white text-gray-700 rounded border shadow-sm hover:bg-gray-50 transition-colors">
+                            <Icon name="arrow-left" size={16} /> 年表へ戻る
+                        </button>
+                        <h2 className="text-xl font-bold flex items-center gap-2">
+                            <Icon name="bar-chart-2" className="text-indigo-600" /> 統計ビュー
+                        </h2>
                     </div>
 
-                    {dataSource === 'spreadsheet' && showConfig && canIApprove && (
-                        <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-lg shadow-inner space-y-4 animate-[slideDown_0.2s_ease-out]">
-                            <div className="text-sm font-bold text-emerald-800 flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2"><Icon name="settings" size={16} /> スプレッドシート連携設定</div>
-                                <div className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded flex items-center gap-1">
-                                    <Icon name="alert-circle" size={10} /> スプレッドシートの共有設定を「リンクを知っている全員」にする必要があります
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 block mb-1">スプレッドシートID</label>
-                                    <input
-                                        className="w-full border p-2 rounded text-sm"
-                                        value={config.spreadsheetId}
-                                        onChange={e => setConfig(prev => ({ ...prev, spreadsheetId: e.target.value }))}
-                                        placeholder="例: 1abc...XYZ"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 block mb-1">シートID (gid)</label>
-                                    <input
-                                        className="w-full border p-2 rounded text-sm"
-                                        value={config.gid}
-                                        onChange={e => setConfig(prev => ({ ...prev, gid: e.target.value }))}
-                                        placeholder="例: 0"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 block mb-1">範囲指定 (range)</label>
-                                    <input
-                                        className="w-full border p-2 rounded text-sm"
-                                        value={config.range}
-                                        onChange={e => setConfig(prev => ({ ...prev, range: e.target.value }))}
-                                        placeholder="例: A1:F50"
-                                    />
-                                </div>
-                            </div>
-                            <div className="flex justify-end gap-2">
-                                <button onClick={() => setShowConfig(false)} className="px-3 py-1.5 text-sm text-gray-500 font-bold hover:bg-white/50 rounded transition-colors">キャンセル</button>
-                                <button onClick={handleSaveConfig} className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm">設定を保存</button>
-                            </div>
-                        </div>
-                    )}
-
-                    {dataSource === 'article' ? (
-                        <div className="bg-white p-4 rounded shadow grid grid-cols-1 md:grid-cols-3 gap-4 border border-gray-100">
-                            <div className="col-span-1 md:col-span-3">
-                                <div className="text-sm font-bold mb-2 flex items-center gap-2 text-gray-700">
-                                    <Icon name="tag" size={14} className="text-indigo-500" /> 条件タグ
-                                    <span className="text-[10px] font-normal text-gray-400">（これらのタグを持つ記事が集計対象になります。複数選択可）</span>
-                                </div>
-                                <div className="flex flex-wrap gap-1.5">
-                                    {tags.map(t => (
-                                        <button
-                                            key={t}
-                                            onClick={() => toggleConditionTag(t)}
-                                            className={`px-2.5 py-1 text-xs rounded-full font-bold transition-all ${conditionTags.includes(t) ? 'bg-indigo-600 text-white shadow-sm' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
-                                        >
-                                            #{t}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="col-span-1 md:col-span-3">
-                                <div className="text-sm font-bold mb-2 flex items-center gap-2 text-gray-700">
-                                    <Icon name="tags" size={14} className="text-indigo-500" /> 要素タグ
-                                    <span className="text-[10px] font-normal text-gray-400">（これらを同一要素として扱い比較します。複数選択可）</span>
-                                </div>
-                                <div className="flex flex-wrap gap-1.5">
-                                    {tags.map(t => (
-                                        <button
-                                            key={t}
-                                            onClick={() => toggleElementTag(t)}
-                                            className={`px-2.5 py-1 text-xs rounded-full font-bold transition-all ${elementTags.includes(t) ? 'bg-indigo-600 text-white shadow-sm' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
-                                        >
-                                            #{t}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="space-y-1">
-                                <div className="text-xs font-bold text-gray-500">統計ステータス A</div>
-                                <select className="w-full border p-2 rounded text-sm bg-gray-50" value={statusA} onChange={e => setStatusA(e.target.value)}>
-                                    <option value="">-- 未選択 --</option>
-                                    {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                            </div>
-                            <div className="space-y-1">
-                                <div className="text-xs font-bold text-gray-500">統計ステータス B</div>
-                                <select className="w-full border p-2 rounded text-sm bg-gray-50" value={statusB} onChange={e => setStatusB(e.target.value)}>
-                                    <option value="">-- 未選択 --</option>
-                                    {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                            </div>
-                            <div className="space-y-1">
-                                <div className="text-xs font-bold text-gray-500">演算子 (A op B)</div>
-                                <select className="w-full border p-2 rounded text-sm bg-gray-50" value={op} onChange={e => setOp(e.target.value)}>
-                                    <option value="+">A + B</option>
-                                    <option value="-">A - B</option>
-                                    <option value="*">A × B</option>
-                                    <option value="/">A ÷ B</option>
-                                </select>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="bg-white p-6 rounded shadow border border-emerald-100 flex flex-col items-center justify-center min-h-[160px] text-center space-y-4">
-                            {!config.spreadsheetId ? (
-                                <div className="space-y-2">
-                                    <div className="text-gray-400 italic">スプレッドシートが設定されていません。</div>
-                                    {canIApprove && (
-                                        <button onClick={() => setShowConfig(true)} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold text-sm shadow hover:bg-emerald-700 transition-colors">設定を開く</button>
-                                    )}
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    <div className="text-emerald-700 font-bold flex items-center justify-center gap-2">
-                                        <Icon name="link" size={16} /> 外部スプレッドシート連携
-                                    </div>
-                                    <div className="text-xs text-gray-500">
-                                        ID: <span className="font-mono">{config.spreadsheetId.slice(0, 8)}...{config.spreadsheetId.slice(-4)}</span> /
-                                        範囲: <span className="font-mono">{config.range || '全体'}</span>
-                                    </div>
-                                    <div className="text-xs text-amber-600 bg-amber-50 px-3 py-1 rounded inline-block">
-                                        ※1列目に年代(数値)、2列目以降に集計値を配置したデータを使用します
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    <div className="flex gap-3">
+                    <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
                         <button
-                            onClick={runAggregate}
-                            disabled={loading}
-                            className={`px-6 py-2.5 rounded font-bold text-white shadow-md transition-all flex items-center gap-2 ${loading ? 'bg-gray-400' : (dataSource === 'article' ? 'bg-indigo-600 hover:bg-indigo-700 hover:-translate-y-0.5' : 'bg-emerald-600 hover:bg-emerald-700 hover:-translate-y-0.5')}`}
+                            onClick={() => setDataSource('article')}
+                            className={`px-3 py-1.5 text-sm font-bold rounded-md transition-all ${dataSource === 'article' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                         >
-                            {loading ? <Icon name="loader" size={18} className="animate-spin" /> : <Icon name="play" size={18} />}
-                            解析を実行
+                            記事データ
                         </button>
                         <button
-                            onClick={() => { setConditionTags([]); setElementTags([]); setStatusA(''); setStatusB(''); setOp('+'); setSeries([]); }}
-                            className="px-4 py-2 border rounded font-bold text-gray-500 hover:bg-gray-50 transition-colors"
+                            onClick={() => setDataSource('spreadsheet')}
+                            className={`px-3 py-1.5 text-sm font-bold rounded-md transition-all ${dataSource === 'spreadsheet' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                         >
-                            リセット
+                            スプレッドシート
                         </button>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl shadow-inner border border-gray-100">
-                        <SimpleLineChart series={series} />
-                        {series.length === 0 && (
-                            <div className="text-sm text-gray-500 mt-4 p-8 border-2 border-dashed border-gray-100 rounded-lg text-center bg-gray-50/50">
-                                {dataSource === 'article'
-                                    ? "条件を選択して「解析を実行」ボタンを押すと、各記事の年代を X 軸としてステータスを集計したグラフが表示されます。"
-                                    : "外部スプレッドシートから取得した時系列データが表示されます。1列目の数値を年代として扱い、各列を独立した系列として描画します。"}
-                            </div>
+                        {canIApprove && dataSource === 'spreadsheet' && (
+                            <button
+                                onClick={() => setShowConfig(!showConfig)}
+                                className="p-1.5 text-gray-500 hover:bg-white hover:text-gray-700 rounded-md transition-all"
+                                title="設定"
+                            >
+                                <Icon name="settings" size={18} />
+                            </button>
                         )}
                     </div>
                 </div>
-            );
+
+                {dataSource === 'spreadsheet' && showConfig && canIApprove && (
+                    <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-lg shadow-inner space-y-4 animate-[slideDown_0.2s_ease-out]">
+                        <div className="text-sm font-bold text-emerald-800 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2"><Icon name="settings" size={16} /> スプレッドシート連携設定</div>
+                            <div className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded flex items-center gap-1">
+                                <Icon name="alert-circle" size={10} /> スプレッドシートの共有設定を「リンクを知っている全員」にする必要があります
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 block mb-1">スプレッドシートID</label>
+                                <input
+                                    className="w-full border p-2 rounded text-sm"
+                                    value={config.spreadsheetId}
+                                    onChange={e => setConfig(prev => ({ ...prev, spreadsheetId: e.target.value }))}
+                                    placeholder="例: 1abc...XYZ"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 block mb-1">シートID (gid)</label>
+                                <input
+                                    className="w-full border p-2 rounded text-sm"
+                                    value={config.gid}
+                                    onChange={e => setConfig(prev => ({ ...prev, gid: e.target.value }))}
+                                    placeholder="例: 0"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 block mb-1">範囲指定 (range)</label>
+                                <input
+                                    className="w-full border p-2 rounded text-sm"
+                                    value={config.range}
+                                    onChange={e => setConfig(prev => ({ ...prev, range: e.target.value }))}
+                                    placeholder="例: A1:F50"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <button onClick={() => setShowConfig(false)} className="px-3 py-1.5 text-sm text-gray-500 font-bold hover:bg-white/50 rounded transition-colors">キャンセル</button>
+                            <button onClick={handleSaveConfig} className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-bold hover:bg-emerald-700 transition-colors shadow-sm">設定を保存</button>
+                        </div>
+                    </div>
+                )}
+
+                {dataSource === 'article' ? (
+                    <div className="bg-white p-4 rounded shadow grid grid-cols-1 md:grid-cols-3 gap-4 border border-gray-100">
+                        <div className="col-span-1 md:col-span-3">
+                            <div className="text-sm font-bold mb-2 flex items-center gap-2 text-gray-700">
+                                <Icon name="tag" size={14} className="text-indigo-500" /> 条件タグ
+                                <span className="text-[10px] font-normal text-gray-400">（これらのタグを持つ記事が集計対象になります。複数選択可）</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {tags.map(t => (
+                                    <button
+                                        key={t}
+                                        onClick={() => toggleConditionTag(t)}
+                                        className={`px-2.5 py-1 text-xs rounded-full font-bold transition-all ${conditionTags.includes(t) ? 'bg-indigo-600 text-white shadow-sm' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
+                                    >
+                                        #{t}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="col-span-1 md:col-span-3">
+                            <div className="text-sm font-bold mb-2 flex items-center gap-2 text-gray-700">
+                                <Icon name="tags" size={14} className="text-indigo-500" /> 要素タグ
+                                <span className="text-[10px] font-normal text-gray-400">（これらを同一要素として扱い比較します。複数選択可）</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {tags.map(t => (
+                                    <button
+                                        key={t}
+                                        onClick={() => toggleElementTag(t)}
+                                        className={`px-2.5 py-1 text-xs rounded-full font-bold transition-all ${elementTags.includes(t) ? 'bg-indigo-600 text-white shadow-sm' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
+                                    >
+                                        #{t}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="space-y-1">
+                            <div className="text-xs font-bold text-gray-500">統計ステータス A</div>
+                            <select className="w-full border p-2 rounded text-sm bg-gray-50" value={statusA} onChange={e => setStatusA(e.target.value)}>
+                                <option value="">-- 未選択 --</option>
+                                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                        </div>
+                        <div className="space-y-1">
+                            <div className="text-xs font-bold text-gray-500">統計ステータス B</div>
+                            <select className="w-full border p-2 rounded text-sm bg-gray-50" value={statusB} onChange={e => setStatusB(e.target.value)}>
+                                <option value="">-- 未選択 --</option>
+                                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                        </div>
+                        <div className="space-y-1">
+                            <div className="text-xs font-bold text-gray-500">演算子 (A op B)</div>
+                            <select className="w-full border p-2 rounded text-sm bg-gray-50" value={op} onChange={e => setOp(e.target.value)}>
+                                <option value="+">A + B</option>
+                                <option value="-">A - B</option>
+                                <option value="*">A × B</option>
+                                <option value="/">A ÷ B</option>
+                            </select>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="bg-white p-6 rounded shadow border border-emerald-100 flex flex-col items-center justify-center min-h-[160px] text-center space-y-4">
+                        {!config.spreadsheetId ? (
+                            <div className="space-y-2">
+                                <div className="text-gray-400 italic">スプレッドシートが設定されていません。</div>
+                                {canIApprove && (
+                                    <button onClick={() => setShowConfig(true)} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold text-sm shadow hover:bg-emerald-700 transition-colors">設定を開く</button>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                <div className="text-emerald-700 font-bold flex items-center justify-center gap-2">
+                                    <Icon name="link" size={16} /> 外部スプレッドシート連携
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                    ID: <span className="font-mono">{config.spreadsheetId.slice(0, 8)}...{config.spreadsheetId.slice(-4)}</span> /
+                                    範囲: <span className="font-mono">{config.range || '全体'}</span>
+                                </div>
+                                <div className="text-xs text-amber-600 bg-amber-50 px-3 py-1 rounded inline-block">
+                                    ※1列目に年代(数値)、2列目以降に集計値を配置したデータを使用します
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                <div className="flex gap-3">
+                    <button
+                        onClick={runAggregate}
+                        disabled={loading}
+                        className={`px-6 py-2.5 rounded font-bold text-white shadow-md transition-all flex items-center gap-2 ${loading ? 'bg-gray-400' : (dataSource === 'article' ? 'bg-indigo-600 hover:bg-indigo-700 hover:-translate-y-0.5' : 'bg-emerald-600 hover:bg-emerald-700 hover:-translate-y-0.5')}`}
+                    >
+                        {loading ? <Icon name="loader" size={18} className="animate-spin" /> : <Icon name="play" size={18} />}
+                        解析を実行
+                    </button>
+                    <button
+                        onClick={() => { setConditionTags([]); setElementTags([]); setStatusA(''); setStatusB(''); setOp('+'); setSeries([]); }}
+                        className="px-4 py-2 border rounded font-bold text-gray-500 hover:bg-gray-50 transition-colors"
+                    >
+                        リセット
+                    </button>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl shadow-inner border border-gray-100">
+                    <SimpleLineChart series={series} />
+                    {series.length === 0 && (
+                        <div className="text-sm text-gray-500 mt-4 p-8 border-2 border-dashed border-gray-100 rounded-lg text-center bg-gray-50/50">
+                            {dataSource === 'article'
+                                ? "条件を選択して「解析を実行」ボタンを押すと、各記事の年代を X 軸としてステータスを集計したグラフが表示されます。"
+                                : "外部スプレッドシートから取得した時系列データが表示されます。1列目の数値を年代として扱い、各列を独立した系列として描画します。"}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
         };
 
         // --- AdjacentArticlePreview (Not used but kept for compatibility) ---

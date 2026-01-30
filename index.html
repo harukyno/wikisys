@@ -2584,11 +2584,10 @@
 
         const fetchSpreadsheetData = async (spreadsheetId, gid, range) => {
             if (!spreadsheetId) return null;
-            // gid がない場合は 0 (最初のシート) とみなす
             const sheetId = gid || '0';
-            // range がある場合は URL に含める
             const rangeParam = range ? `&range=${encodeURIComponent(range)}` : '';
-            const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheetId}${rangeParam}`;
+            // /export?format=csv よりも /gviz/tq?tqx=out:csv の方が公開設定等に対して堅牢な傾向があります
+            const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${sheetId}${rangeParam}`;
 
             try {
                 const response = await fetch(url);
@@ -2597,26 +2596,60 @@
                 return parseCSV(csvText, ',');
             } catch (err) {
                 console.error("Spreadsheet Fetch Error:", err);
-                alert("スプレッドシートの取得に失敗しました。公開設定を確認してください。");
+                // 失敗した場合は従来の /export URL を試行するフォールバック
+                const fallbackUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${sheetId}${rangeParam}`;
+                try {
+                    const res2 = await fetch(fallbackUrl);
+                    if (res2.ok) return parseCSV(await res2.text(), ',');
+                } catch (e) { }
+
+                alert("スプレッドシートの取得に失敗しました。公開設定（リンクを知っている全員）を確認してください。");
                 return null;
             }
         };
 
         const parseSpreadsheetCSVToSeries = (rows) => {
-            if (!rows || rows.length < 2) return [];
-            // 期待する形式: 1列目が年代(数値), 2列目以降が各シリーズの値
-            // 1行目はヘッダ
-            const header = rows[0];
-            const seriesMap = {}; // seriesName -> points[]
+            if (!rows || rows.length < 1) return [];
 
-            for (let i = 1; i < rows.length; i++) {
+            // 1) ヘッダ行と「年代」列を特定する
+            let yearCol = -1;
+            let headerRowIndex = -1;
+            const yearRegex = /記録年|年代|年份|Year|Time|Date/i;
+
+            for (let i = 0; i < Math.min(rows.length, 20); i++) {
                 const row = rows[i];
-                const year = parseInt(row[0]);
+                const idx = row.findIndex(cell => cell && yearRegex.test(String(cell)));
+                if (idx !== -1) {
+                    yearCol = idx;
+                    headerRowIndex = i;
+                    break;
+                }
+            }
+
+            // 見つからない場合は 0列目 を年代と仮定
+            if (yearCol === -1) {
+                yearCol = 0;
+                headerRowIndex = 0;
+            }
+
+            const header = rows[headerRowIndex];
+            const seriesMap = {};
+
+            // 2) データの抽出 (ヘッダ行以降をスキャン)
+            for (let i = headerRowIndex + 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row[yearCol]) continue;
+
+                const year = parseInt(String(row[yearCol]).replace(/[,\s]/g, ''));
                 if (isNaN(year)) continue;
 
-                for (let j = 1; j < row.length; j++) {
-                    const seriesName = header[j] || `Series ${j}`;
-                    const val = parseFloat((row[j] || '').replace(/[,\s]/g, ''));
+                for (let j = 0; j < row.length; j++) {
+                    if (j === yearCol) continue;
+                    const seriesName = (header[j] || `Series ${j}`).trim();
+                    if (!seriesName) continue;
+
+                    const valRaw = String(row[j] || '').replace(/[,\s]/g, '');
+                    const val = parseFloat(valRaw);
                     if (!isNaN(val)) {
                         if (!seriesMap[seriesName]) seriesMap[seriesName] = [];
                         seriesMap[seriesName].push({ year, value: val });
@@ -2810,7 +2843,16 @@
                     try {
                         const rows = await fetchSpreadsheetData(config.spreadsheetId, config.gid, config.range);
                         if (rows) {
-                            const s = parseSpreadsheetCSVToSeries(rows);
+                            let s = parseSpreadsheetCSVToSeries(rows);
+                            // UIで選択されているステータスがあればフィルタリングする
+                            if (statusA || statusB) {
+                                s = s.filter(series => {
+                                    const k = series.key.toLowerCase();
+                                    const a = (statusA || '').toLowerCase();
+                                    const b = (statusB || '').toLowerCase();
+                                    return (a && k.includes(a)) || (b && k.includes(b));
+                                });
+                            }
                             setSeries(s);
                         }
                     } finally {
