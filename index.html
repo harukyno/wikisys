@@ -40,6 +40,9 @@
     <script src="https://cdn.jsdelivr.net/npm/jsuites/dist/jsuites.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsuites/dist/jsuites.min.css" type="text/css" />
 
+    <!-- Vis Network -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+
     <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp, deleteApp, getApps } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
@@ -278,6 +281,7 @@
             { key: 'list', label: '一覧', icon: 'list' },
             { key: 'map', label: '地図', icon: 'map' },
             { key: 'timeline_large', label: '構造年表', icon: 'git-branch' },
+            { key: 'network', label: '相関図', icon: 'share-2' },
             { key: 'spreadsheet', label: 'データ', icon: 'table-2' },
             { key: 'stats', label: '統計', icon: 'bar-chart-2' }
         ];
@@ -496,7 +500,130 @@
             );
         };
 
-        // Decide region tags based on location points and REGION_TAG_RULES
+        // --- Network Graph View ---
+        const NetworkGraphView = ({ articles, onArticleSelect }) => {
+            const containerRef = React.useRef(null);
+            const networkRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (!containerRef.current || !articles) return;
+
+                // 1. Prepare Data
+                const nodes = [];
+                const edges = [];
+                const articleMap = new Map(); // Title -> ID mapping for link resolution
+                const idMap = new Map();
+
+                articles.forEach(a => {
+                    articleMap.set(a.title, a.id);
+                    idMap.set(a.id, a);
+                });
+
+                // Create Nodes
+                articles.forEach(a => {
+                    const typeInfo = ARTICLE_TYPES[a.type] || ARTICLE_TYPES.other;
+                    // Extract color code from Tailwind class (approximate for vis-network)
+                    let color = '#e5e7eb'; // default gray-200
+                    if (typeInfo.color.includes('blue')) color = '#bfdbfe';
+                    if (typeInfo.color.includes('red')) color = '#fecaca';
+                    if (typeInfo.color.includes('green')) color = '#bbf7d0';
+                    if (typeInfo.color.includes('purple')) color = '#e9d5ff';
+                    if (typeInfo.color.includes('emerald')) color = '#a7f3d0';
+                    if (typeInfo.color.includes('amber')) color = '#fde68a';
+                    if (typeInfo.color.includes('cyan')) color = '#a5f3fc';
+
+                    nodes.push({
+                        id: a.id,
+                        label: a.title,
+                        group: a.type,
+                        value: (a.importance || 3), // Size based on importance
+                        color: { background: color, border: '#666' },
+                        shape: 'dot',
+                        font: { size: 14, color: '#333' }
+                    });
+
+                    // Create Edges from [[Link]]
+                    const linkRegex = /\[\[(.*?)(?:\|(.*?))?\]\]/g;
+                    let match;
+                    const content = (a.contentHtml || '') + (a.summary || ''); // Search in content
+
+                    // Helper to add unique edge
+                    const addEdge = (targetId) => {
+                        if (targetId && targetId !== a.id && idMap.has(targetId)) {
+                            // Check if edge already exists to avoid duplicates (optional, vis handles multigraphs depending on settings)
+                            edges.push({ from: a.id, to: targetId, arrows: 'to', color: { color: '#ccc', opacity: 0.5 } });
+                        }
+                    };
+
+                    while ((match = linkRegex.exec(content)) !== null) {
+                        const linkText = match[1];
+                        const linkId = match[2];
+
+                        if (linkId) {
+                            addEdge(linkId);
+                        } else {
+                            const targetId = articleMap.get(linkText);
+                            if (targetId) addEdge(targetId);
+                        }
+                    }
+                });
+
+                const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+
+                const options = {
+                    nodes: {
+                        shape: 'dot',
+                        scaling: {
+                            min: 10,
+                            max: 30,
+                            label: { enabled: true, min: 14, max: 24 }
+                        }
+                    },
+                    edges: {
+                        smooth: { type: 'continuous' }
+                    },
+                    physics: {
+                        stabilization: false,
+                        barnesHut: {
+                            gravitationalConstant: -8000,
+                            springConstant: 0.04,
+                            springLength: 95
+                        }
+                    },
+                    interaction: {
+                        tooltipDelay: 200,
+                        hideEdgesOnDrag: true
+                    }
+                };
+
+                networkRef.current = new vis.Network(containerRef.current, data, options);
+
+                networkRef.current.on("click", function (params) {
+                    if (params.nodes.length > 0) {
+                        const nodeId = params.nodes[0];
+                        if (onArticleSelect) onArticleSelect(idMap.get(nodeId));
+                    }
+                });
+
+                return () => {
+                    if (networkRef.current) networkRef.current.destroy();
+                };
+            }, [articles]);
+
+            return (
+                <div className="h-full flex flex-col bg-white/10 backdrop-blur rounded-xl border border-white/10 overflow-hidden">
+                    <div className="p-4 bg-white/80 border-b flex justify-between items-center">
+                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                            <Icon name="share-2" className="text-indigo-500" /> 相関図ネットワーク
+                        </h2>
+                        <div className="text-sm text-gray-500">
+                            ノードをダブルクリックまたはクリックで記事を開きます
+                        </div>
+                    </div>
+                    <div ref={containerRef} className="flex-1 bg-gray-50/50" style={{ minHeight: '500px' }}></div>
+                </div>
+            );
+        };
         const computeRegionTags = (locations = [], rules = REGION_TAG_RULES_DEFAULT) => {
             const tags = new Set();
             if (!Array.isArray(locations) || locations.length === 0) return [];
@@ -3512,6 +3639,16 @@
                                 }} appContextId={appContextId} /></div>
                             </div>}
                             {viewMode === 'timeline_large' && <LargeTimelineView articles={filteredTimelineArticles} onSelectArticle={setSelectedArticle} onEditArticle={startEditingArticle} onDeleteArticle={handleDeleteArticle} onDuplicateArticle={handleDuplicateArticle} focusedArticle={selectedArticle} onFocusChange={setSelectedArticle} allArticles={articles} searchState={timelineFilters} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true })} worldData={worldData} appContextId={appContextId} myRole={myRole} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { setSelectedArticle(art); setViewMode('single_article'); } } else { setViewMode('timeline_noyear'); } }} onOpenTagArticle={openTagArticle} tagArticleValue={tagArticleInput} onTagArticleValueChange={setTagArticleInput} />}
+                            {viewMode === 'network' && (
+                                <div className="absolute inset-0 bg-slate-100 p-4">
+                                    <NetworkGraphView articles={articles} onArticleSelect={(article) => {
+                                        if (article) {
+                                            setSelectedArticle(article);
+                                            setViewMode('single_article');
+                                        }
+                                    }} />
+                                </div>
+                            )}
                             {viewMode === 'stats' && <GraphView setView={setViewMode} articles={articles} />}
                             {viewMode === 'spreadsheet' && <LargeSpreadsheetView articles={articles} filters={timelineFilters} />}
                             {viewMode === 'timeline_noyear' && (
