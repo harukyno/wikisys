@@ -730,7 +730,8 @@
                 const tag = argList.find(a => a.startsWith('tag='))?.split('=')[1] || '';
                 const id = 'dt-' + Math.random().toString(36).substr(2, 9);
 
-                setTimeout(() => {
+                // 動的にデータを読み込むためのプレースホルダ
+                setTimeout(async () => {
                     const el = document.getElementById(id);
                     if (!el || !window.articles) return;
 
@@ -741,37 +742,138 @@
                     }).sort((a, b) => (a.year || 0) - (b.year || 0));
 
                     if (filtered.length === 0) {
-                        el.innerHTML = '<div class="p-4 text-gray-200 text-xs italic">該当する記事が見つかりません。</div>';
+                        el.innerHTML = '<div class="p-4 text-gray-400 text-xs italic">該当する記事が見つかりません。</div>';
                         return;
                     }
 
+                    // マッピング設定を取得
+                    const mappings = window.worldData?.sheetFieldMappings || [];
+
+                    // 各記事のスプレッドシートデータを取得する関数
+                    const fetchSheetData = async (article) => {
+                        // 記事内容からスプレッドシートURLを抽出
+                        const content = article.contentHtml || '';
+                        const sheetMatch = content.match(/#googlesheet\(([^)]+)\)/);
+                        if (!sheetMatch || mappings.length === 0) return {};
+
+                        const sheetUrl = sheetMatch[1];
+                        const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+                        if (!sheetIdMatch) return {};
+
+                        const sheetId = sheetIdMatch[1];
+                        const proxyUrl = window.worldData?.spreadsheetProxyUrl;
+                        if (!proxyUrl) return {};
+
+                        // GAS経由でセル値を取得 (JSONP)
+                        return new Promise((resolve) => {
+                            const callbackName = 'sheet_cb_' + Math.random().toString(36).substr(2, 9);
+                            const timeout = setTimeout(() => {
+                                delete window[callbackName];
+                                resolve({});
+                            }, 10000);
+
+                            window[callbackName] = (res) => {
+                                clearTimeout(timeout);
+                                delete window[callbackName];
+                                const s = document.getElementById(callbackName);
+                                if (s) s.remove();
+
+                                if (res.status === 'success' && res.values) {
+                                    // マッピングに従ってフィールド値を作成
+                                    const result = {};
+                                    mappings.forEach(m => {
+                                        if (res.values[m.cell] !== undefined) {
+                                            result[m.field] = res.values[m.cell];
+                                        }
+                                    });
+                                    resolve(result);
+                                } else {
+                                    resolve({});
+                                }
+                            };
+
+                            const cells = mappings.map(m => m.cell).join(',');
+                            const params = new URLSearchParams();
+                            params.set('callback', callbackName);
+                            params.set('action', 'getCellValues');
+                            params.set('sheetId', sheetId);
+                            params.set('cells', cells);
+
+                            const script = document.createElement('script');
+                            script.id = callbackName;
+                            script.src = proxyUrl + (proxyUrl.includes('?') ? '&' : '?') + params.toString();
+                            document.body.appendChild(script);
+                        });
+                    };
+
+                    // ローディング表示
+                    el.innerHTML = '<div class="p-4 text-gray-400 text-xs italic text-center">データ読み込み中...</div>';
+
+                    // 全記事のシートデータを取得（並列実行）
+                    const sheetDataPromises = filtered.map(a => fetchSheetData(a));
+                    const sheetDataResults = await Promise.all(sheetDataPromises);
+
+                    // 記事データにシートデータをマージ
+                    const enrichedArticles = filtered.map((a, i) => ({
+                        ...a,
+                        sheetData: sheetDataResults[i]
+                    }));
 
                     const wikiLinkRenderer = (instance, td, col, row, index, val) => {
-                        // タイトル列の場合、IDとのペアが来ていると理想的だが、ここでは名前解決に頼るか、
-                        // もしくはデータソース自体を [[Title|ID]] にしておく。
-                        // filtered から ID を引くのはソート順の管理が難しいので、単純なテキスト変換を行う。
-                        // ただし、名前解決のリスク（同名記事）があるため、可能ならIDを埋め込みたい。
-                        // 以下の columns 定義で data を工夫する。
-
                         td.innerHTML = parsePukiWikiSyntax ? parsePukiWikiSyntax(val) : val;
                     };
 
-                    const data = filtered.map(a => [`[[${a.title}|${a.id}]]`, a.year || 0, a.importance || 3]);
+                    // 基本列 + マッピング列を構築
+                    const baseColumns = [
+                        { type: 'text', title: 'タイトル', width: 200, readOnly: true, renderer: wikiLinkRenderer },
+                        { type: 'numeric', title: '年代', width: 80 },
+                        { type: 'numeric', title: '重要度', width: 60 },
+                    ];
+
+                    // マッピングで定義されたフィールドを列として追加
+                    const mappingColumns = mappings.map(m => ({
+                        type: 'text',
+                        title: m.field,
+                        width: 100,
+                        readOnly: true
+                    }));
+
+                    const allColumns = [...baseColumns, ...mappingColumns];
+
+                    // データ行を構築
+                    const data = enrichedArticles.map(a => {
+                        const baseRow = [`[[${a.title}|${a.id}]]`, a.year || 0, a.importance || 3];
+                        const mappingValues = mappings.map(m => a.sheetData[m.field] ?? '');
+                        return [...baseRow, ...mappingValues];
+                    });
+
+                    el.innerHTML = ''; // ローディング表示をクリア
+
                     jspreadsheet(el, {
                         data: data,
-                        columns: [
-                            { type: 'text', title: 'タイトル', width: 250, readOnly: true, renderer: wikiLinkRenderer },
-                            { type: 'numeric', title: '年代', width: 80, readOnly: true },
-                            { type: 'numeric', title: '重要度', width: 60, readOnly: true },
-                        ],
+                        columns: allColumns,
+                        onchange: async (instance, cell, col, row, val) => {
+                            // 年代または重要度が変更された場合、Firestoreに保存
+                            const articleId = instance.jexcel.getValueFromCoords(0, row).match(/\|([^\]]+)\]\]$/)?.[1];
+                            const field = col === 1 ? 'year' : col === 2 ? 'importance' : null;
+                            if (field && articleId) {
+                                try {
+                                    const { doc, updateDoc } = window.firebaseModules;
+                                    const db = window.db;
+                                    const ctx = window.appContextId;
+                                    const w = window.worldId;
+                                    await updateDoc(doc(db, 'artifacts', ctx, 'public', 'data', 'worlds', w, 'articles', articleId), {
+                                        [field]: Number(val)
+                                    });
+                                } catch (e) { console.error(e); }
+                            }
+                        },
                         search: true,
                         pagination: 10,
-                        allowInsertRow: false,
-                        allowDeleteRow: false,
                     });
                 }, 100);
 
-                return `<div class="wiki-datatable my-6 p-2 bg-slate-800/40 border border-slate-700 rounded-lg shadow-inner overflow-hidden">
+                return `<div class="wiki-datatable my-6 p-2 bg-slate-50 border rounded-lg shadow-inner overflow-hidden">
                     <div class="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
                         <i data-lucide="database" class="w-3 h-3"></i> データベース自動集計: ${folder || tag || '全て'}
                     </div>
