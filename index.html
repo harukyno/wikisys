@@ -2778,10 +2778,69 @@
             return Array.from(set).sort((a, b) => a.localeCompare(b));
         };
 
+        // 記事内のスプレッドシートから指定されたセル値を取得するヘルパー関数
+        const fetchSheetDataForArticle = async (article, statusFieldMap, proxyUrl) => {
+            const result = {};
+
+            // 記事内容からスプレッドシートURLを抽出
+            const content = article.contentHtml || '';
+            const sheetMatch = content.match(/\{\{googlesheet:.*?docs\.google\.com\/spreadsheets\/d\/([^\/,\}]+)/);
+
+            if (!sheetMatch) return result;
+
+            const spreadsheetId = sheetMatch[1];
+
+            if (!proxyUrl) {
+                console.warn('スプレッドシートプロキシURLが設定されていません');
+                return result;
+            }
+
+            // セル値をバッチで取得
+            const cells = Object.values(statusFieldMap).join(',');
+
+            return new Promise((resolve) => {
+                const callbackName = 'sheet_cb_' + Math.random().toString(36).substr(2, 9);
+                const timeout = setTimeout(() => {
+                    delete window[callbackName];
+                    resolve({});
+                }, 10000);
+
+                window[callbackName] = (res) => {
+                    clearTimeout(timeout);
+                    delete window[callbackName];
+                    const scriptEl = document.getElementById(callbackName);
+                    if (scriptEl) scriptEl.remove();
+
+                    if (res.status === 'success' && res.values) {
+                        // statusFieldMap に従ってマッピング
+                        Object.entries(statusFieldMap).forEach(([statusName, cell]) => {
+                            if (res.values[cell] !== undefined) {
+                                const numVal = parseFloat(res.values[cell]);
+                                if (!isNaN(numVal)) {
+                                    result[statusName] = numVal;
+                                }
+                            }
+                        });
+                    }
+                    resolve(result);
+                };
+
+                const script = document.createElement('script');
+                script.id = callbackName;
+                const params = new URLSearchParams();
+                params.set('callback', callbackName);
+                params.set('action', 'getCellValues');
+                params.set('sheetId', spreadsheetId);
+                params.set('cells', cells);
+                script.src = `${proxyUrl}?${params.toString()}`;
+                document.body.appendChild(script);
+            });
+        };
+
         // articles: list, selectedTags: 条件タグ(複数), groupTag: 要素タグ（同一要素扱い）
         // statusA/statusB: 統計ステータス名（ラベル）
         // op: '+','-','*','/'
-        const collectAllStatusLabels = (articles = []) => {
+        const collectAllStatusLabels = (articles = [], worldData = null) => {
             const set = new Set();
             articles.forEach(a => {
                 // from article.stats
@@ -2790,10 +2849,20 @@
                 const tableMap = parseTablesFromHtml(a.contentHtml || '');
                 Object.keys(tableMap).forEach(k => set.add(k));
             });
+
+            // 新規: tagToSheetMappings からステータスラベルを収集
+            if (worldData?.tagToSheetMappings) {
+                worldData.tagToSheetMappings.forEach(mapping => {
+                    Object.keys(mapping.statusFieldMap || {}).forEach(statusName => {
+                        set.add(statusName);
+                    });
+                });
+            }
+
             return Array.from(set).sort((a, b) => a.localeCompare(b));
         };
 
-        const aggregateSeriesByGroup = (articles = [], selectedTags = [], groupTags = [], statusA = '', statusB = '', op = '+') => {
+        const aggregateSeriesByGroup = async (articles = [], selectedTags = [], groupTags = [], statusA = '', statusB = '', op = '+', worldData = null) => {
             // filter by condition tags: if none selected include all, otherwise include articles that have ANY of the selectedTags
             const selected = articles.filter(a => {
                 if (!selectedTags || selectedTags.length === 0) return true;
@@ -2802,7 +2871,7 @@
             });
 
             // prepare per-article status map: label -> numeric value
-            const perArticle = selected.map(a => {
+            const perArticle = await Promise.all(selected.map(async (a) => {
                 const year = Math.floor(getArticleYear(a));
                 const map = {};
                 // stats array
@@ -2816,8 +2885,26 @@
                 // tables
                 const tableMap = parseTablesFromHtml(a.contentHtml || '');
                 Object.keys(tableMap).forEach(k => { map[k] = (map[k] || 0) + Number(tableMap[k]); });
+
+                // 新規: タグベースのスプレッドシート連携
+                const articleTags = safeArray(a.tags);
+                if (worldData?.tagToSheetMappings && worldData?.spreadsheetProxyUrl) {
+                    for (const tagMapping of worldData.tagToSheetMappings) {
+                        if (articleTags.includes(tagMapping.tag)) {
+                            // この記事がマッピング対象タグを持っている
+                            try {
+                                const sheetData = await fetchSheetDataForArticle(a, tagMapping.statusFieldMap, worldData.spreadsheetProxyUrl);
+                                Object.assign(map, sheetData);
+                            } catch (e) {
+                                console.error(`Failed to fetch sheet data for article ${a.id}:`, e);
+                            }
+                            break; // 最初にマッチしたマッピングのみ適用
+                        }
+                    }
+                }
+
                 return { article: a, year, map };
-            });
+            }));
 
             // grouping: support multiple groupTags (element tags). If groupTags provided, only create groups for those tags
             const groups = new Map();
@@ -2935,8 +3022,12 @@
             const [config, setConfig] = React.useState(worldData?.statsConfig || { spreadsheetId: '', gid: '0', range: '' });
             const [showConfig, setShowConfig] = React.useState(false);
 
+            // Tag to Spreadsheet Mappings
+            const [tagMappings, setTagMappings] = React.useState(worldData?.tagToSheetMappings || []);
+            const [showTagMappings, setShowTagMappings] = React.useState(false);
+
             const tags = collectAllTags(articles);
-            const statuses = collectAllStatusLabels(articles);
+            const statuses = collectAllStatusLabels(articles, worldData);
 
             const toggleConditionTag = (t) => setConditionTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
             const toggleElementTag = (t) => setElementTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
@@ -2944,7 +3035,7 @@
             const runAggregate = async () => {
                 if (dataSource === 'article') {
                     if (!statusA && !statusB) { alert('少なくとも1つの統計ステータスを選択してください'); return; }
-                    const s = aggregateSeriesByGroup(articles, conditionTags, elementTags, statusA, statusB, op);
+                    const s = await aggregateSeriesByGroup(articles, conditionTags, elementTags, statusA, statusB, op, worldData);
                     setSeries(s);
                 } else {
                     setLoading(true);
@@ -3024,6 +3115,71 @@
                     });
                     alert('設定を保存しました');
                     setShowConfig(false);
+                } catch (e) { alert("保存失敗: " + e.message); }
+            };
+
+            // タグマッピング管理関数
+            const addNewTagMapping = () => {
+                setTagMappings([...tagMappings, { tag: '', statusFieldMap: {} }]);
+            };
+
+            const removeTagMapping = (index) => {
+                setTagMappings(tagMappings.filter((_, i) => i !== index));
+            };
+
+            const updateTagMappingTag = (index, newTag) => {
+                const updated = [...tagMappings];
+                updated[index] = { ...updated[index], tag: newTag };
+                setTagMappings(updated);
+            };
+
+            const addStatusMapping = (mappingIndex) => {
+                const updated = [...tagMappings];
+                const statusMap = updated[mappingIndex].statusFieldMap || {};
+                const newKey = `ステータス${Object.keys(statusMap).length + 1}`;
+                updated[mappingIndex] = {
+                    ...updated[mappingIndex],
+                    statusFieldMap: { ...statusMap, [newKey]: 'A1' }
+                };
+                setTagMappings(updated);
+            };
+
+            const removeStatusMapping = (mappingIndex, statusName) => {
+                const updated = [...tagMappings];
+                const statusMap = { ...updated[mappingIndex].statusFieldMap };
+                delete statusMap[statusName];
+                updated[mappingIndex] = {
+                    ...updated[mappingIndex],
+                    statusFieldMap: statusMap
+                };
+                setTagMappings(updated);
+            };
+
+            const updateStatusMapping = (mappingIndex, oldStatusName, newStatusName, newCell) => {
+                const updated = [...tagMappings];
+                const statusMap = { ...updated[mappingIndex].statusFieldMap };
+
+                if (newStatusName !== oldStatusName) {
+                    delete statusMap[oldStatusName];
+                }
+                statusMap[newStatusName] = newCell;
+
+                updated[mappingIndex] = {
+                    ...updated[mappingIndex],
+                    statusFieldMap: statusMap
+                };
+                setTagMappings(updated);
+            };
+
+            const handleSaveTagMappings = async () => {
+                if (!canIApprove) return;
+                const { updateDoc, doc } = window.firebaseModules;
+                try {
+                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), {
+                        tagToSheetMappings: tagMappings
+                    });
+                    alert('タグマッピング設定を保存しました');
+                    setShowTagMappings(false);
                 } catch (e) { alert("保存失敗: " + e.message); }
             };
 
@@ -3126,6 +3282,13 @@
                                     <option value="/">A ÷ B</option>
                                 </select>
                             </div>
+                            {canIApprove && (
+                                <div className="col-span-1 md:col-span-3 mt-2 flex justify-end">
+                                    <button onClick={() => setShowTagMappings(true)} className="text-xs flex items-center gap-1 text-indigo-600 border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-50">
+                                        <Icon name="settings" size={12} /> タグ連携設定
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <div className="bg-white p-6 rounded shadow border border-emerald-100 flex flex-col items-center justify-center min-h-[160px] text-center space-y-4">
@@ -3180,6 +3343,74 @@
                             </div>
                         )}
                     </div>
+                    {/* Tag Mapping Config Modal */}
+                    {showTagMappings && (
+                        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowTagMappings(false)}>
+                            <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                                <h3 className="text-lg font-bold mb-4">タグ連携設定 (スプレッドシート自動取得)</h3>
+                                <p className="text-sm text-gray-500 mb-4">
+                                    指定したタグを持つ記事に対して、埋め込まれたスプレッドシートから自動的にセル値を取得し、統計ステータスとして利用できるようにします。
+                                </p>
+
+                                <div className="space-y-4 mb-6">
+                                    {tagMappings.map((tm, idx) => (
+                                        <div key={idx} className="border rounded p-4 bg-gray-50 relative">
+                                            <button onClick={() => removeTagMapping(idx)} className="absolute top-2 right-2 text-gray-400 hover:text-red-500">
+                                                <Icon name="x" size={16} />
+                                            </button>
+
+                                            <div className="flex items-center gap-2 mb-3">
+                                                <label className="text-sm font-bold w-20">タグ名:</label>
+                                                <input
+                                                    type="text"
+                                                    value={tm.tag}
+                                                    onChange={e => updateTagMappingTag(idx, e.target.value)}
+                                                    placeholder="例: 国家"
+                                                    className="border px-2 py-1 rounded text-sm flex-1"
+                                                />
+                                            </div>
+
+                                            <div className="pl-4 border-l-2 border-indigo-200">
+                                                <div className="text-xs font-bold text-gray-500 mb-2">ステータスとセルの対応</div>
+                                                {Object.entries(tm.statusFieldMap || {}).map(([status, cell], sIdx) => (
+                                                    <div key={sIdx} className="flex items-center gap-2 mb-2">
+                                                        <input
+                                                            value={status}
+                                                            onChange={e => updateStatusMapping(idx, status, e.target.value, cell)}
+                                                            placeholder="ステータス名"
+                                                            className="border px-2 py-1 rounded text-xs w-1/3"
+                                                        />
+                                                        <span className="text-gray-400">→</span>
+                                                        <input
+                                                            value={cell}
+                                                            onChange={e => updateStatusMapping(idx, status, status, e.target.value)}
+                                                            placeholder="セル (例: B2)"
+                                                            className="border px-2 py-1 rounded text-xs w-20 font-mono"
+                                                        />
+                                                        <button onClick={() => removeStatusMapping(idx, status)} className="text-red-400 hover:text-red-600">
+                                                            <Icon name="trash-2" size={12} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                <button onClick={() => addStatusMapping(idx)} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mt-1">
+                                                    <Icon name="plus" size={12} /> ステータス追加
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+
+                                    <button onClick={addNewTagMapping} className="w-full py-2 border-2 border-dashed border-gray-300 text-gray-500 rounded hover:bg-gray-50 hover:border-gray-400 transition-colors flex items-center justify-center gap-2">
+                                        <Icon name="plus" size={16} /> 新しいタグ設定を追加
+                                    </button>
+                                </div>
+
+                                <div className="flex justify-end gap-2 pt-4 border-t">
+                                    <button onClick={() => setShowTagMappings(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+                                    <button onClick={handleSaveTagMappings} className="px-4 py-2 bg-indigo-600 text-white rounded font-bold hover:bg-indigo-700">設定を保存</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
