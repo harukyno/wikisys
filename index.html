@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 
 <head>
@@ -3876,7 +3876,8 @@
                 window.db = db;
                 window.appContextId = appContextId;
                 window.worldId = worldId;
-            }, [articles, db, appContextId, worldId]);
+                window.worldData = worldData;
+            }, [articles, db, appContextId, worldId, worldData]);
 
             const handleDuplicateArticle = (article) => {
                 if (!article) return;
