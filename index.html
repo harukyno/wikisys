@@ -553,11 +553,28 @@
                         }
                     }
 
+                    // Center high importance nodes
+                    let initialX, initialY, nodeMass;
+                    const importance = a.importance || 3;
+
+                    if (importance >= 4) {
+                        // Higher mass makes them harder to push away from center
+                        nodeMass = importance * 1.5;
+                        // Initial position near center
+                        initialX = (Math.random() - 0.5) * 100;
+                        initialY = (Math.random() - 0.5) * 100;
+                    } else {
+                        nodeMass = 1;
+                    }
+
                     nodes.push({
                         id: a.id,
                         label: a.title,
                         group: a.type,
-                        value: (a.importance || 3), // Size based on importance
+                        value: importance, // Size based on importance
+                        mass: nodeMass,
+                        x: initialX,
+                        y: initialY,
                         color: { background: color, border: borderColor },
                         borderWidth: borderWidth,
                         shape: 'dot',
@@ -609,6 +626,9 @@
                             springConstant: 0.04,
                             springLength: 300
                         }
+                    },
+                    layout: {
+                        improvedLayout: false // Disable to prevent infinite loop/warnings on large graphs
                     },
                     interaction: {
                         tooltipDelay: 200,
@@ -3096,6 +3116,9 @@
             const tags = collectAllTags(articles);
             const statuses = collectAllStatusLabels(articles, worldData);
 
+            const [tagSearchQuery, setTagSearchQuery] = React.useState('');
+            const filteredTags = tags.filter(t => t.toLowerCase().includes(tagSearchQuery.toLowerCase()));
+
             const toggleConditionTag = (t) => setConditionTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
             const toggleElementTag = (t) => setElementTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
@@ -3112,8 +3135,6 @@
                     setLoading(false);
                 }
             };
-
-
 
             // タグマッピング管理関数
             const addNewTagMapping = () => {
@@ -3194,13 +3215,23 @@
                     </div>
 
                     <div className="bg-white p-4 rounded shadow grid grid-cols-1 md:grid-cols-3 gap-4 border border-gray-100">
+                        <div className="col-span-1 md:col-span-3 mb-2">
+                            <input
+                                type="text"
+                                placeholder="タグを検索..."
+                                value={tagSearchQuery}
+                                onChange={e => setTagSearchQuery(e.target.value)}
+                                className="w-full border px-3 py-1.5 rounded text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                        </div>
+
                         <div className="col-span-1 md:col-span-3">
                             <div className="text-sm font-bold mb-2 flex items-center gap-2 text-gray-700">
                                 <Icon name="tag" size={14} className="text-indigo-500" /> 条件タグ
                                 <span className="text-[10px] font-normal text-gray-400">（これらのタグを持つ記事が集計対象になります。複数選択可）</span>
                             </div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {tags.map(t => (
+                            <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto custom-scrollbar p-1 border rounded bg-gray-50/50">
+                                {filteredTags.map(t => (
                                     <button
                                         key={t}
                                         onClick={() => toggleConditionTag(t)}
@@ -3209,6 +3240,7 @@
                                         #{t}
                                     </button>
                                 ))}
+                                {filteredTags.length === 0 && <span className="text-xs text-gray-400">タグが見つかりません</span>}
                             </div>
                         </div>
                         <div className="col-span-1 md:col-span-3">
@@ -3216,8 +3248,8 @@
                                 <Icon name="tags" size={14} className="text-indigo-500" /> 要素タグ
                                 <span className="text-[10px] font-normal text-gray-400">（これらを同一要素として扱い比較します。複数選択可）</span>
                             </div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {tags.map(t => (
+                            <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto custom-scrollbar p-1 border rounded bg-gray-50/50">
+                                {filteredTags.map(t => (
                                     <button
                                         key={t}
                                         onClick={() => toggleElementTag(t)}
@@ -3226,6 +3258,7 @@
                                         #{t}
                                     </button>
                                 ))}
+                                {filteredTags.length === 0 && <span className="text-xs text-gray-400">タグが見つかりません</span>}
                             </div>
                         </div>
                         <div className="space-y-1">
@@ -3391,9 +3424,14 @@
             const hasCheckedWorldURL = React.useRef(false); // URL復元中のフラグ
             const hasRedirectedToMain = React.useRef(false); // メインページへの自動遷移フラグ
 
+            const hasRestoredFromURL = React.useRef(false); // URLからの復元完了フラグ (articles更新による再実行防止)
+
             // メインページへの自動遷移（世界選択時のみ）
             React.useEffect(() => {
-                if (worldId) hasRedirectedToMain.current = false;
+                if (worldId) {
+                    hasRedirectedToMain.current = false;
+                    hasRestoredFromURL.current = false;
+                }
             }, [worldId]);
 
             React.useEffect(() => {
@@ -3439,7 +3477,8 @@
 
             // URLから状態を復元（初回読み込み時）
             React.useEffect(() => {
-                if (!user || !worldId || articles.length === 0 || isRestoringFromURL.current) return;
+                // hasRestoredFromURL.current が true なら、articlesが更新されても再実行しない
+                if (!user || !worldId || articles.length === 0 || isRestoringFromURL.current || hasRestoredFromURL.current) return;
 
                 const params = new URLSearchParams(window.location.search);
                 const urlView = params.get('view');
@@ -3460,12 +3499,14 @@
                         if (urlView) setViewMode(urlView);
                         else setViewMode('single_article');
                         console.log('URL復元: 記事表示', article.title, urlView);
+                        updated = true;
                     }
                 } else if (urlView && urlView !== viewMode) {
                     // ビューモードのみ指定されている場合
                     isRestoringFromURL.current = true;
                     setViewMode(urlView);
                     console.log('URL復元: ビューモード', urlView);
+                    updated = true;
                 }
 
                 if (urlKeyword || urlTag) {
@@ -3494,9 +3535,11 @@
                     updated = true;
                 }
 
-                if (updated) {
-                    isRestoringFromURL.current = true;
-                }
+                // 復元処理完了としてマーク
+                hasRestoredFromURL.current = true;
+
+                // もしURLパラメータが何もなく、updated=falseだった場合でも、
+                // これ以上このeffectを走らせないために hasRestoredFromURL は true にする
             }, [user, worldId, articles]);
 
             // 状態が変更されたらURLを更新（ブラウザの履歴に追加）
