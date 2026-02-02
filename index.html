@@ -555,6 +555,12 @@
             React.useEffect(() => {
                 if (!containerRef.current || !articles) return;
 
+                console.log(`[NetworkGraph] Rendering with showMapMode=${showMapMode}, articles=${articles.length}`);
+
+                // Count articles with coordinates
+                const articlesWithCoords = articles.filter(a => a.lng != null || a.lat != null);
+                console.log(`[NetworkGraph] Articles with coordinates: ${articlesWithCoords.length}`, articlesWithCoords.map(a => ({ title: a.title, lng: a.lng, lat: a.lat })));
+
                 // 1. Prepare Data
                 const nodes = [];
                 const edges = [];
@@ -634,6 +640,7 @@
                         initialY = -valLat * (worldHeight / 180);
 
                         fixed = { x: true, y: true };
+                        console.log(`[Map Mode] Locking node: ${a.title} at (${valLng}, ${valLat}) -> px(${initialX}, ${initialY})`);
                     } else if (importance >= 4 && !showMapMode) {
                         // Standard Mode High Importance logic
                         nodeMass = importance * 1.5;
