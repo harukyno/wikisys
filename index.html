@@ -501,19 +501,48 @@
         };
 
         // --- Network Graph View ---
-        const NetworkGraphView = ({ articles, onArticleSelect, focusedArticle }) => {
+        const NetworkGraphView = ({ articles, onArticleSelect, focusedArticle, worldData }) => {
             const containerRef = React.useRef(null);
             const networkRef = React.useRef(null);
             const [searchQuery, setSearchQuery] = React.useState('');
             const [groupingTag, setGroupingTag] = React.useState('');
             const [showTagNodes, setShowTagNodes] = React.useState(false); // Tag Hub Mode
+            const [showMapMode, setShowMapMode] = React.useState(false); // Map Mode
             const [availableTags, setAvailableTags] = React.useState([]);
+            const [targetYear, setTargetYear] = React.useState(null); // Time Sizing Mode
+            const [yearRange, setYearRange] = React.useState({ min: 0, max: 0 });
 
-            // Collect all unique tags for autocomplete/selection
+            // Map Image Loading
+            const mapImageRef = React.useRef(null);
+            React.useEffect(() => {
+                if (worldData?.mapImageUrl) {
+                    const img = new Image();
+                    img.src = worldData.mapImageUrl;
+                    img.onload = () => { mapImageRef.current = img; if (networkRef.current) networkRef.current.redraw(); };
+                }
+            }, [worldData?.mapImageUrl]);
+
+            // Collect all unique tags and Year Range
             React.useEffect(() => {
                 const tags = new Set();
-                articles.forEach(a => safeArray(a.tags).forEach(t => tags.add(t)));
+                let minYear = Infinity;
+                let maxYear = -Infinity;
+                let hasYears = false;
+
+                articles.forEach(a => {
+                    safeArray(a.tags).forEach(t => tags.add(t));
+                    const y = getArticleYear(a);
+                    if (y && y !== 0 && !a.noYear) {
+                        minYear = Math.min(minYear, y);
+                        maxYear = Math.max(maxYear, y);
+                        hasYears = true;
+                    }
+                });
                 setAvailableTags(Array.from(tags).sort());
+                if (hasYears) {
+                    setYearRange({ min: Math.floor(minYear), max: Math.ceil(maxYear) });
+                    if (targetYear === null) setTargetYear(Math.floor(minYear)); // Default to start
+                }
             }, [articles]);
 
             React.useEffect(() => {
@@ -529,6 +558,9 @@
                     articleMap.set(a.title, a.id);
                     idMap.set(a.id, a);
                 });
+
+                // Coordinate conversion constants
+                const DEG_TO_PX = 15; // 1度あたりのピクセル数
 
                 // Create Nodes
                 articles.forEach(a => {
@@ -555,13 +587,38 @@
                     }
 
                     // Center high importance nodes
-                    let initialX, initialY, nodeMass;
-                    const importance = a.importance || 3;
+                    let initialX = undefined;
+                    let initialY = undefined;
+                    let fixed = false;
+                    let nodeMass;
+                    let importance = a.importance || 3;
 
-                    if (importance >= 4) {
-                        // Higher mass makes them harder to push away from center
+                    // Time Sizing Logic
+                    // If targetYear is active, attenuate importance based on time distance
+                    // UNLESS noYear is true or year is missing
+                    if (targetYear !== null) {
+                        const y = getArticleYear(a);
+                        if (y && y !== 0 && !a.noYear) {
+                            const diff = Math.abs(y - targetYear);
+                            // Decay factor: Half-life of 50 years?
+                            // Scale factor decreases as diff increases
+                            const scale = 1 / (1 + diff / 50);
+                            importance = importance * scale;
+                            // Ensure minimum size visibility (but small)
+                            if (importance < 0.5) importance = 0.5;
+                        }
+                    }
+
+                    // Map Mode Logic: Lock coords if exists
+                    if (showMapMode && (a.lng != null || a.lat != null)) {
+                        const valLng = Number(a.lng) || 0;
+                        const valLat = Number(a.lat) || 0;
+                        initialX = valLng * DEG_TO_PX;
+                        initialY = -valLat * DEG_TO_PX; // Y is down in Canvas
+                        fixed = { x: true, y: true };
+                    } else if (importance >= 4 && !showMapMode) {
+                        // Standard Mode High Importance logic
                         nodeMass = importance * 1.5;
-                        // Initial position near center
                         initialX = (Math.random() - 0.5) * 100;
                         initialY = (Math.random() - 0.5) * 100;
                     } else {
@@ -576,11 +633,15 @@
                         mass: nodeMass,
                         x: initialX,
                         y: initialY,
+                        fixed: fixed,
                         color: { background: color, border: borderColor },
                         borderWidth: borderWidth,
                         shape: 'dot',
                         font: { size: 14, color: '#333' },
-                        tags: safeArray(a.tags) // Custom data for clustering
+                        tags: safeArray(a.tags),
+                        // Custom props for edge logic
+                        lng: Number(a.lng) || 0,
+                        hasLoc: (a.lng != null)
                     });
 
                     // Create Edges from [[Link]]
@@ -590,7 +651,27 @@
 
                     const addEdge = (targetId) => {
                         if (targetId && targetId !== a.id && idMap.has(targetId)) {
-                            edges.push({ from: a.id, to: targetId, arrows: 'to', color: { color: '#ccc', opacity: 0.5 } });
+                            // Infinite Edge Wrapping Logic prep
+                            // We will calculate geometry in renderer, but here we can flag potential wrap
+                            const target = idMap.get(targetId);
+                            let hidden = false;
+
+                            if (showMapMode && a.lng != null && target?.lng != null) {
+                                const diff = Math.abs(Number(a.lng) - Number(target.lng));
+                                if (diff > 180) {
+                                    hidden = true; // Use custom drawing for these
+                                }
+                            }
+
+                            edges.push({
+                                from: a.id,
+                                to: targetId,
+                                arrows: 'to',
+                                color: { color: '#ccc', opacity: hidden ? 0 : 0.5 },
+                                hidden: false, // We use 'opacity:0' to hide but keep physics/data, or actual hidden:true
+                                width: hidden ? 0 : 1, // Minimize visual impact if "hidden"
+                                isWrapped: hidden
+                            });
                         }
                     };
 
@@ -663,7 +744,8 @@
                             gravitationalConstant: -30000,
                             springConstant: 0.04,
                             springLength: 300
-                        }
+                        },
+                        enabled: !showMapMode // Reduce physics jitter in Map Mode? Or keep it for floating nodes? Keep enabled but fixed nodes won't move.
                     },
                     layout: {
                         improvedLayout: false // Disable to prevent infinite loop/warnings on large graphs
@@ -676,6 +758,100 @@
 
                 // Initialize Network
                 networkRef.current = new vis.Network(containerRef.current, data, options);
+
+                // --- Canvas Events for Map Mode ---
+                networkRef.current.on("beforeDrawing", (ctx) => {
+                    if (!showMapMode || !mapImageRef.current) return;
+
+                    const mapImg = mapImageRef.current;
+                    const viewPos = networkRef.current.getViewPosition();
+                    const scale = networkRef.current.getScale();
+
+                    // World Width in px: 360 deg * 15px/deg = 5400px
+                    const worldWidth = 360 * DEG_TO_PX;
+                    const worldHeight = 180 * DEG_TO_PX; // approx
+
+                    // Draw centered at 0,0
+                    // Map image covers -180 to 180 Longitude => x: -2700 to 2700
+                    // Image aspect ratio might differ, but let's stretch to cover world coordinates
+
+                    const drawMap = (offsetX) => {
+                        ctx.save();
+                        ctx.globalAlpha = 0.5;
+                        // Image, x, y, width, height. 
+                        // Target map: x from -2700 to 2700. Image center at 0,0.
+                        ctx.drawImage(mapImg, -worldWidth / 2 + offsetX, -worldHeight / 2, worldWidth, worldHeight);
+                        ctx.restore();
+                    };
+
+                    drawMap(0);
+                    drawMap(-worldWidth);
+                    drawMap(worldWidth);
+                });
+
+                networkRef.current.on("afterDrawing", (ctx) => {
+                    if (!showMapMode) return;
+
+                    // Custom Edge Wrapping Drawing
+                    const worldWidth = 360 * DEG_TO_PX;
+
+                    edges.forEach(edge => {
+                        if (edge.isWrapped) {
+                            const nodeFrom = data.nodes.get(edge.from);
+                            const nodeTo = data.nodes.get(edge.to);
+                            if (!nodeFrom || !nodeTo) return;
+
+                            const posFrom = networkRef.current.getPositions([edge.from])[edge.from];
+                            const posTo = networkRef.current.getPositions([edge.to])[edge.to];
+
+                            if (posFrom && posTo) {
+                                ctx.save();
+                                ctx.strokeStyle = '#ccc';
+                                ctx.lineWidth = 1;
+                                ctx.setLineDash([5, 5]); // Dashed line for wrapped connections
+
+                                // Determine direction. 
+                                // If from.x < to.x, traditionally goes right. But wrapped means |diff| > 180.
+                                // e.g. From -170 (Left), To +170 (Right). Valid shortest path is crossing -180/180.
+                                // Distance regular: 340. 
+                                // Wrap left from From: -170 -> -180 -> +180 -> +170.
+
+                                // Draw Line 1: From -> Nearest Edge
+                                let leftX = -worldWidth / 2;
+                                let rightX = worldWidth / 2;
+
+                                // If NodeA is negative(West) and NodeB is positive(East), and we wrap...
+                                // NodeA goes West to edge. NodeB comes from East edge.
+
+                                if (posFrom.x < posTo.x) {
+                                    // Normally Left to Right. Wrap means Left->LeftEdge, Right->RightEdge
+                                    ctx.beginPath();
+                                    ctx.moveTo(posFrom.x, posFrom.y);
+                                    ctx.lineTo(leftX, (posFrom.y + posTo.y) / 2); // simplified y-interp
+                                    ctx.stroke();
+
+                                    ctx.beginPath();
+                                    ctx.moveTo(rightX, (posFrom.y + posTo.y) / 2);
+                                    ctx.lineTo(posTo.x, posTo.y);
+                                    ctx.stroke();
+                                } else {
+                                    // Right to Left. Wrap means Right->RightEdge, Left->LeftEdge
+                                    ctx.beginPath();
+                                    ctx.moveTo(posFrom.x, posFrom.y);
+                                    ctx.lineTo(rightX, (posFrom.y + posTo.y) / 2);
+                                    ctx.stroke();
+
+                                    ctx.beginPath();
+                                    ctx.moveTo(leftX, (posFrom.y + posTo.y) / 2);
+                                    ctx.lineTo(posTo.x, posTo.y);
+                                    ctx.stroke();
+                                }
+
+                                ctx.restore();
+                            }
+                        }
+                    });
+                });
 
                 networkRef.current.on("click", function (params) {
                     if (params.nodes.length > 0) {
@@ -711,7 +887,7 @@
                 return () => {
                     if (networkRef.current) networkRef.current.destroy();
                 };
-            }, [articles, searchQuery, groupingTag, showTagNodes]); // Re-render when these change
+            }, [articles, searchQuery, groupingTag, showTagNodes, showMapMode, worldData]); // Re-render when these change
 
             // Handle Focus on External Select (or Search Result Click if we implement that)
             React.useEffect(() => {
@@ -772,6 +948,37 @@
                             />
                             <span className="text-sm font-bold text-gray-700">タグをノード化 (Hub)</span>
                         </label>
+
+                        <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
+                            <input
+                                type="checkbox"
+                                checked={showMapMode}
+                                onChange={e => setShowMapMode(e.target.checked)}
+                                className="rounded text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-sm font-bold text-gray-700">地図背景モード</span>
+                        </label>
+
+                        {yearRange.min !== yearRange.max && targetYear !== null && (
+                            <div className="bg-white/90 border border-gray-300 rounded px-3 py-2 shadow-sm space-y-1">
+                                <label className="text-xs font-bold text-gray-500 flex justify-between">
+                                    <span>時代: {targetYear}年</span>
+                                    <button onClick={() => setTargetYear(null)} className="text-[10px] text-red-500 hover:underline">解除</button>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={yearRange.min}
+                                    max={yearRange.max}
+                                    value={targetYear}
+                                    onChange={e => setTargetYear(Number(e.target.value))}
+                                    className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                />
+                                <div className="flex justify-between text-[10px] text-gray-400 font-mono">
+                                    <span>{yearRange.min}</span>
+                                    <span>{yearRange.max}</span>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div ref={containerRef} className="flex-1 bg-gray-50/50" style={{ minHeight: '500px' }}></div>
@@ -4501,7 +4708,7 @@
                             {viewMode === 'timeline_large' && <LargeTimelineView articles={filteredTimelineArticles} onSelectArticle={setSelectedArticle} onEditArticle={startEditingArticle} onDeleteArticle={handleDeleteArticle} onDuplicateArticle={handleDuplicateArticle} focusedArticle={selectedArticle} onFocusChange={setSelectedArticle} allArticles={articles} searchState={timelineFilters} onSearchChange={p => setTimelineFilters(prev => ({ ...prev, ...p }))} onResetFilters={() => setTimelineFilters({ type: 'all', keyword: '', tag: '', excludeNoYear: true })} worldData={worldData} appContextId={appContextId} myRole={myRole} isMember={isMember} onOpenNoYear={(id) => { if (id) { const art = articles.find(x => x.id === id); if (art) { setSelectedArticle(art); setViewMode('single_article'); } } else { setViewMode('timeline_noyear'); } }} onOpenTagArticle={openTagArticle} tagArticleValue={tagArticleInput} onTagArticleValueChange={setTagArticleInput} />}
                             {viewMode === 'network' && (
                                 <div className="absolute inset-0 bg-slate-100 p-4">
-                                    <NetworkGraphView articles={articles} focusedArticle={selectedArticle} onArticleSelect={(article) => {
+                                    <NetworkGraphView articles={articles} focusedArticle={selectedArticle} worldData={worldData} onArticleSelect={(article) => {
                                         if (article) {
                                             setSelectedArticle(article);
                                             setViewMode('single_article');
