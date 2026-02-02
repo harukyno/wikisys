@@ -506,6 +506,7 @@
             const networkRef = React.useRef(null);
             const [searchQuery, setSearchQuery] = React.useState('');
             const [groupingTag, setGroupingTag] = React.useState('');
+            const [showTagNodes, setShowTagNodes] = React.useState(false); // Tag Hub Mode
             const [availableTags, setAvailableTags] = React.useState([]);
 
             // Collect all unique tags for autocomplete/selection
@@ -605,6 +606,43 @@
                     }
                 });
 
+                // Tag Node Generation (Hubs)
+                if (showTagNodes) {
+                    const uniqueTags = new Set();
+                    articles.forEach(a => safeArray(a.tags).forEach(t => uniqueTags.add(t)));
+
+                    uniqueTags.forEach(tag => {
+                        const tagId = `tag_${tag}`;
+                        nodes.push({
+                            id: tagId,
+                            label: '#' + tag,
+                            group: '__tag__',
+                            value: 5,
+                            mass: 3,
+                            color: { background: '#818cf8', border: '#4f46e5' }, // Indigo-400/600
+                            shape: 'diamond',
+                            font: { size: 14, color: '#4f46e5', face: 'arial' },
+                            isTagNode: true
+                        });
+                        idMap.set(tagId, { title: tag, isTag: true }); // Dummy obj for selection safety
+                    });
+
+                    // Add edges from articles to their tags
+                    articles.forEach(a => {
+                        safeArray(a.tags).forEach(tag => {
+                            const tagId = `tag_${tag}`;
+                            edges.push({
+                                from: a.id,
+                                to: tagId,
+                                arrows: undefined, // No arrows for tag relations
+                                color: { color: '#a5b4fc', opacity: 0.3 },
+                                length: 250,
+                                dashes: true
+                            });
+                        });
+                    });
+                }
+
                 const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
 
                 const options = {
@@ -673,7 +711,7 @@
                 return () => {
                     if (networkRef.current) networkRef.current.destroy();
                 };
-            }, [articles, searchQuery, groupingTag]); // Re-render when these change
+            }, [articles, searchQuery, groupingTag, showTagNodes]); // Re-render when these change
 
             // Handle Focus on External Select (or Search Result Click if we implement that)
             React.useEffect(() => {
@@ -722,7 +760,18 @@
                                     <Icon name="x" size={14} />
                                 </button>
                             )}
+
                         </div>
+
+                        <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
+                            <input
+                                type="checkbox"
+                                checked={showTagNodes}
+                                onChange={e => setShowTagNodes(e.target.checked)}
+                                className="rounded text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span className="text-sm font-bold text-gray-700">タグをノード化 (Hub)</span>
+                        </label>
                     </div>
 
                     <div ref={containerRef} className="flex-1 bg-gray-50/50" style={{ minHeight: '500px' }}></div>
