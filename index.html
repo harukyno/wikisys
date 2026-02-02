@@ -558,8 +558,14 @@
                 console.log(`[NetworkGraph] Rendering with showMapMode=${showMapMode}, articles=${articles.length}`);
 
                 // Count articles with coordinates
-                const articlesWithCoords = articles.filter(a => a.lng != null || a.lat != null);
-                console.log(`[NetworkGraph] Articles with coordinates: ${articlesWithCoords.length}`, articlesWithCoords.map(a => ({ title: a.title, lng: a.lng, lat: a.lat })));
+                const articlesWithCoords = articles.filter(a => {
+                    if (Array.isArray(a.locations) && a.locations.length > 0) {
+                        const loc = a.locations[0];
+                        return loc.lat != null && loc.lng != null;
+                    }
+                    return false;
+                });
+                console.log(`[NetworkGraph] Articles with coordinates: ${articlesWithCoords.length}`, articlesWithCoords.map(a => ({ title: a.title, loc: a.locations[0] })));
 
                 // 1. Prepare Data
                 const nodes = [];
@@ -623,24 +629,27 @@
                     }
 
                     // Map Mode Logic: Lock coords if exists
-                    if (showMapMode && (a.lng != null || a.lat != null)) {
-                        const valLng = Number(a.lng) || 0;
-                        const valLat = Number(a.lat) || 0;
-                        // Determine scale based on Aspect Ratio
-                        // X is always 360 * DEG_TO_PX
-                        // Y should be proportional. If map is 2:1, Y is 180 * DEG_TO_PX.
-                        // If map is different, we scale Y to match image height relative to X width.
+                    if (showMapMode && Array.isArray(a.locations) && a.locations.length > 0) {
+                        const loc = a.locations[0]; // Use first location
+                        if (loc.lat != null && loc.lng != null) {
+                            const valLng = Number(loc.lng) || 0;
+                            const valLat = Number(loc.lat) || 0;
+                            // Determine scale based on Aspect Ratio
+                            // X is always 360 * DEG_TO_PX
+                            // Y should be proportional. If map is 2:1, Y is 180 * DEG_TO_PX.
+                            // If map is different, we scale Y to match image height relative to X width.
 
-                        const worldWidth = 360 * DEG_TO_PX;
-                        const worldHeight = worldWidth / mapAspectRatio;
+                            const worldWidth = 360 * DEG_TO_PX;
+                            const worldHeight = worldWidth / mapAspectRatio;
 
-                        // Map Y coordinate: -90 to 90 -> -worldHeight/2 to worldHeight/2
-                        // Linear mapping: y = -valLat * (worldHeight / 180)
-                        initialX = valLng * DEG_TO_PX;
-                        initialY = -valLat * (worldHeight / 180);
+                            // Map Y coordinate: -90 to 90 -> -worldHeight/2 to worldHeight/2
+                            // Linear mapping: y = -valLat * (worldHeight / 180)
+                            initialX = valLng * DEG_TO_PX;
+                            initialY = -valLat * (worldHeight / 180);
 
-                        fixed = { x: true, y: true };
-                        console.log(`[Map Mode] Locking node: ${a.title} at (${valLng}, ${valLat}) -> px(${initialX}, ${initialY})`);
+                            fixed = { x: true, y: true };
+                            console.log(`[Map Mode] Locking node: ${a.title} at (${valLng}, ${valLat}) -> px(${initialX}, ${initialY})`);
+                        }
                     } else if (importance >= 4 && !showMapMode) {
                         // Standard Mode High Importance logic
                         nodeMass = importance * 1.5;
