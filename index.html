@@ -578,9 +578,6 @@
                     idMap.set(a.id, a);
                 });
 
-                // Coordinate conversion constants
-                const DEG_TO_PX = 15; // 1度あたりのピクセル数
-
                 // Create Nodes
                 articles.forEach(a => {
                     const typeInfo = ARTICLE_TYPES[a.type] || ARTICLE_TYPES.other;
