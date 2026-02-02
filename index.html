@@ -871,139 +871,138 @@
                         }
                     });
                 });
-            });
 
-            networkRef.current.on("click", function (params) {
-                if (params.nodes.length > 0) {
-                    const nodeId = params.nodes[0];
-                    // check if it is a cluster
-                    if (networkRef.current.isCluster(nodeId)) {
-                        networkRef.current.openCluster(nodeId);
-                        return;
+                networkRef.current.on("click", function (params) {
+                    if (params.nodes.length > 0) {
+                        const nodeId = params.nodes[0];
+                        // check if it is a cluster
+                        if (networkRef.current.isCluster(nodeId)) {
+                            networkRef.current.openCluster(nodeId);
+                            return;
+                        }
+                        if (onArticleSelect) onArticleSelect(idMap.get(nodeId));
                     }
-                    if (onArticleSelect) onArticleSelect(idMap.get(nodeId));
+                });
+
+                // Apply Clustering if groupingTag is set
+                if (groupingTag) {
+                    const clusterOptions = {
+                        joinCondition: (nodeOptions) => {
+                            return nodeOptions.tags && nodeOptions.tags.includes(groupingTag);
+                        },
+                        clusterNodeProperties: {
+                            id: 'cluster_' + groupingTag,
+                            label: groupingTag,
+                            color: '#fbbf24',
+                            shape: 'ellipse',
+                            borderWidth: 3,
+                            font: { size: 18, color: '#000', face: 'arial' },
+                            allowSingleNodeCluster: true
+                        }
+                    };
+                    networkRef.current.cluster(clusterOptions);
                 }
-            });
 
-            // Apply Clustering if groupingTag is set
-            if (groupingTag) {
-                const clusterOptions = {
-                    joinCondition: (nodeOptions) => {
-                        return nodeOptions.tags && nodeOptions.tags.includes(groupingTag);
-                    },
-                    clusterNodeProperties: {
-                        id: 'cluster_' + groupingTag,
-                        label: groupingTag,
-                        color: '#fbbf24',
-                        shape: 'ellipse',
-                        borderWidth: 3,
-                        font: { size: 18, color: '#000', face: 'arial' },
-                        allowSingleNodeCluster: true
-                    }
+                return () => {
+                    if (networkRef.current) networkRef.current.destroy();
                 };
-                networkRef.current.cluster(clusterOptions);
-            }
+            }, [articles, searchQuery, groupingTag, showTagNodes, showMapMode, worldData, targetYear, mapAspectRatio]); // Re-render when these change
 
-            return () => {
-                if (networkRef.current) networkRef.current.destroy();
-            };
-        }, [articles, searchQuery, groupingTag, showTagNodes, showMapMode, worldData, targetYear, mapAspectRatio]); // Re-render when these change
-
-        // Handle Focus on External Select (or Search Result Click if we implement that)
-        React.useEffect(() => {
-            if (focusedArticle && networkRef.current) {
-                // check if node exists or is in cluster
-                const indices = networkRef.current.body.nodeIndices;
-                if (indices.includes(focusedArticle.id)) {
-                    networkRef.current.focus(focusedArticle.id, { animation: true, scale: 1.0 });
-                    networkRef.current.selectNodes([focusedArticle.id]);
+            // Handle Focus on External Select (or Search Result Click if we implement that)
+            React.useEffect(() => {
+                if (focusedArticle && networkRef.current) {
+                    // check if node exists or is in cluster
+                    const indices = networkRef.current.body.nodeIndices;
+                    if (indices.includes(focusedArticle.id)) {
+                        networkRef.current.focus(focusedArticle.id, { animation: true, scale: 1.0 });
+                        networkRef.current.selectNodes([focusedArticle.id]);
+                    }
                 }
-            }
-        }, [focusedArticle]);
+            }, [focusedArticle]);
 
-        return (
-            <div className="h-full flex flex-col bg-white/10 backdrop-blur rounded-xl border border-white/10 overflow-hidden relative group">
-                <div className="p-4 bg-white/80 border-b flex justify-between items-center">
-                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                        <Icon name="share-2" className="text-indigo-500" /> 相関図ネットワーク
-                    </h2>
-                    <div className="text-sm text-gray-500 hidden md:block">
-                        ノードをダブルクリックで開く / タグでバブル化
-                    </div>
-                </div>
-
-                {/* Graph Controls Overlay */}
-                <div className="absolute top-16 left-4 z-10 flex flex-col gap-2 w-64">
-                    <input
-                        className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        placeholder="検索 (ノード強調)..."
-                        value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
-                    />
-                    <div className="relative">
-                        <input
-                            className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                            placeholder="タグでバブル化 (例: History)..."
-                            value={groupingTag}
-                            onChange={e => setGroupingTag(e.target.value)}
-                            list="grouping-tags-list"
-                        />
-                        <datalist id="grouping-tags-list">
-                            {availableTags.slice(0, 50).map(t => <option key={t} value={t} />)}
-                        </datalist>
-                        {groupingTag && (
-                            <button onClick={() => setGroupingTag('')} className="absolute right-2 top-1.5 text-gray-400 hover:text-gray-600">
-                                <Icon name="x" size={14} />
-                            </button>
-                        )}
-
-                    </div>
-
-                    <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
-                        <input
-                            type="checkbox"
-                            checked={showTagNodes}
-                            onChange={e => setShowTagNodes(e.target.checked)}
-                            className="rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <span className="text-sm font-bold text-gray-700">タグをノード化 (Hub)</span>
-                    </label>
-
-                    <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
-                        <input
-                            type="checkbox"
-                            checked={showMapMode}
-                            onChange={e => setShowMapMode(e.target.checked)}
-                            className="rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <span className="text-sm font-bold text-gray-700">地図背景モード</span>
-                    </label>
-
-                    {yearRange.min !== yearRange.max && targetYear !== null && (
-                        <div className="bg-white/90 border border-gray-300 rounded px-3 py-2 shadow-sm space-y-1">
-                            <label className="text-xs font-bold text-gray-500 flex justify-between">
-                                <span>時代: {targetYear}年</span>
-                                <button onClick={() => setTargetYear(null)} className="text-[10px] text-red-500 hover:underline">解除</button>
-                            </label>
-                            <input
-                                type="range"
-                                min={yearRange.min}
-                                max={yearRange.max}
-                                value={targetYear}
-                                onChange={e => setTargetYear(Number(e.target.value))}
-                                className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                            />
-                            <div className="flex justify-between text-[10px] text-gray-400 font-mono">
-                                <span>{yearRange.min}</span>
-                                <span>{yearRange.max}</span>
-                            </div>
+            return (
+                <div className="h-full flex flex-col bg-white/10 backdrop-blur rounded-xl border border-white/10 overflow-hidden relative group">
+                    <div className="p-4 bg-white/80 border-b flex justify-between items-center">
+                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                            <Icon name="share-2" className="text-indigo-500" /> 相関図ネットワーク
+                        </h2>
+                        <div className="text-sm text-gray-500 hidden md:block">
+                            ノードをダブルクリックで開く / タグでバブル化
                         </div>
-                    )}
-                </div>
+                    </div>
 
-                <div ref={containerRef} className="flex-1 bg-gray-50/50" style={{ minHeight: '500px' }}></div>
-            </div>
-        );
+                    {/* Graph Controls Overlay */}
+                    <div className="absolute top-16 left-4 z-10 flex flex-col gap-2 w-64">
+                        <input
+                            className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            placeholder="検索 (ノード強調)..."
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value)}
+                        />
+                        <div className="relative">
+                            <input
+                                className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                                placeholder="タグでバブル化 (例: History)..."
+                                value={groupingTag}
+                                onChange={e => setGroupingTag(e.target.value)}
+                                list="grouping-tags-list"
+                            />
+                            <datalist id="grouping-tags-list">
+                                {availableTags.slice(0, 50).map(t => <option key={t} value={t} />)}
+                            </datalist>
+                            {groupingTag && (
+                                <button onClick={() => setGroupingTag('')} className="absolute right-2 top-1.5 text-gray-400 hover:text-gray-600">
+                                    <Icon name="x" size={14} />
+                                </button>
+                            )}
+
+                        </div>
+
+                        <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
+                            <input
+                                type="checkbox"
+                                checked={showTagNodes}
+                                onChange={e => setShowTagNodes(e.target.checked)}
+                                className="rounded text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span className="text-sm font-bold text-gray-700">タグをノード化 (Hub)</span>
+                        </label>
+
+                        <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
+                            <input
+                                type="checkbox"
+                                checked={showMapMode}
+                                onChange={e => setShowMapMode(e.target.checked)}
+                                className="rounded text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-sm font-bold text-gray-700">地図背景モード</span>
+                        </label>
+
+                        {yearRange.min !== yearRange.max && targetYear !== null && (
+                            <div className="bg-white/90 border border-gray-300 rounded px-3 py-2 shadow-sm space-y-1">
+                                <label className="text-xs font-bold text-gray-500 flex justify-between">
+                                    <span>時代: {targetYear}年</span>
+                                    <button onClick={() => setTargetYear(null)} className="text-[10px] text-red-500 hover:underline">解除</button>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={yearRange.min}
+                                    max={yearRange.max}
+                                    value={targetYear}
+                                    onChange={e => setTargetYear(Number(e.target.value))}
+                                    className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                />
+                                <div className="flex justify-between text-[10px] text-gray-400 font-mono">
+                                    <span>{yearRange.min}</span>
+                                    <span>{yearRange.max}</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div ref={containerRef} className="flex-1 bg-gray-50/50" style={{ minHeight: '500px' }}></div>
+                </div>
+            );
         };
         const computeRegionTags = (locations = [], rules = REGION_TAG_RULES_DEFAULT) => {
             const tags = new Set();
