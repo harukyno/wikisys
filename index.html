@@ -630,7 +630,7 @@
                         const loc = a.locations[0]; // Use first location
                         if (loc.lat != null && loc.lng != null) {
                             const valLng = Number(loc.lng) || 0;
-                            const valLat = -(Number(loc.lat) || 0);
+                            const valLat = Number(loc.lat) || 0;
                             // Use pixel coordinates directly (same as MapView)
                             // MapView uses: L.circleMarker([loc.lat, loc.lng], ...)
                             // vis.js canvas has Y-down, Leaflet has Y-up, so negate Y
