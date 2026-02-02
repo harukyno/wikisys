@@ -513,12 +513,19 @@
             const [yearRange, setYearRange] = React.useState({ min: 0, max: 0 });
 
             // Map Image Loading
+            // Map Image Loading & Aspect Ratio
             const mapImageRef = React.useRef(null);
+            const [mapAspectRatio, setMapAspectRatio] = React.useState(2); // Default 2:1 (Equirectangular)
+
             React.useEffect(() => {
                 if (worldData?.mapImageUrl) {
                     const img = new Image();
                     img.src = worldData.mapImageUrl;
-                    img.onload = () => { mapImageRef.current = img; if (networkRef.current) networkRef.current.redraw(); };
+                    img.onload = () => {
+                        mapImageRef.current = img;
+                        setMapAspectRatio(img.width / img.height);
+                        if (networkRef.current) networkRef.current.redraw();
+                    };
                 }
             }, [worldData?.mapImageUrl]);
 
@@ -613,16 +620,29 @@
                     if (showMapMode && (a.lng != null || a.lat != null)) {
                         const valLng = Number(a.lng) || 0;
                         const valLat = Number(a.lat) || 0;
+                        // Determine scale based on Aspect Ratio
+                        // X is always 360 * DEG_TO_PX
+                        // Y should be proportional. If map is 2:1, Y is 180 * DEG_TO_PX.
+                        // If map is different, we scale Y to match image height relative to X width.
+
+                        const worldWidth = 360 * DEG_TO_PX;
+                        const worldHeight = worldWidth / mapAspectRatio;
+
+                        // Map Y coordinate: -90 to 90 -> -worldHeight/2 to worldHeight/2
+                        // Linear mapping: y = -valLat * (worldHeight / 180)
                         initialX = valLng * DEG_TO_PX;
-                        initialY = -valLat * DEG_TO_PX; // Y is down in Canvas
+                        initialY = -valLat * (worldHeight / 180);
+
                         fixed = { x: true, y: true };
                     } else if (importance >= 4 && !showMapMode) {
                         // Standard Mode High Importance logic
                         nodeMass = importance * 1.5;
                         initialX = (Math.random() - 0.5) * 100;
                         initialY = (Math.random() - 0.5) * 100;
+                        fixed = false;
                     } else {
                         nodeMass = 1;
+                        fixed = false;
                     }
 
                     nodes.push({
@@ -745,7 +765,7 @@
                             springConstant: 0.04,
                             springLength: 300
                         },
-                        enabled: !showMapMode // Reduce physics jitter in Map Mode? Or keep it for floating nodes? Keep enabled but fixed nodes won't move.
+                        enabled: true // Always enable physics so un-anchored nodes float
                     },
                     layout: {
                         improvedLayout: false // Disable to prevent infinite loop/warnings on large graphs
@@ -769,7 +789,7 @@
 
                     // World Width in px: 360 deg * 15px/deg = 5400px
                     const worldWidth = 360 * DEG_TO_PX;
-                    const worldHeight = 180 * DEG_TO_PX; // approx
+                    const worldHeight = worldWidth / mapAspectRatio; // Dynamic Height
 
                     // Draw centered at 0,0
                     // Map image covers -180 to 180 Longitude => x: -2700 to 2700
