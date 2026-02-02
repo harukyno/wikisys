@@ -634,18 +634,12 @@
                         if (loc.lat != null && loc.lng != null) {
                             const valLng = Number(loc.lng) || 0;
                             const valLat = Number(loc.lat) || 0;
-                            // Determine scale based on Aspect Ratio
-                            // X is always 360 * DEG_TO_PX
-                            // Y should be proportional. If map is 2:1, Y is 180 * DEG_TO_PX.
-                            // If map is different, we scale Y to match image height relative to X width.
 
-                            const worldWidth = 360 * DEG_TO_PX;
-                            const worldHeight = worldWidth / mapAspectRatio;
-
-                            // Map Y coordinate: -90 to 90 -> -worldHeight/2 to worldHeight/2
-                            // Linear mapping: y = -valLat * (worldHeight / 180)
-                            initialX = valLng * DEG_TO_PX;
-                            initialY = -valLat * (worldHeight / 180);
+                            // Use pixel coordinates directly (same as MapView)
+                            // MapView uses: L.circleMarker([loc.lat, loc.lng], ...)
+                            // vis.js canvas: x = lng, y = lat (no conversion needed)
+                            initialX = valLng;
+                            initialY = valLat;
 
                             fixed = { x: true, y: true };
                             console.log(`[Map Mode] Locking node: ${a.title} at (${valLng}, ${valLat}) -> px(${initialX}, ${initialY})`);
@@ -694,14 +688,19 @@
                     const addEdge = (targetId) => {
                         if (targetId && targetId !== a.id && idMap.has(targetId)) {
                             // Infinite Edge Wrapping Logic prep
-                            // We will calculate geometry in renderer, but here we can flag potential wrap
                             const target = idMap.get(targetId);
                             let hidden = false;
 
-                            if (showMapMode && a.lng != null && target?.lng != null) {
-                                const diff = Math.abs(Number(a.lng) - Number(target.lng));
-                                if (diff > 180) {
-                                    hidden = true; // Use custom drawing for these
+                            if (showMapMode && mapImageRef.current) {
+                                const aLoc = Array.isArray(a.locations) && a.locations.length > 0 ? a.locations[0] : null;
+                                const tLoc = Array.isArray(target.locations) && target.locations.length > 0 ? target.locations[0] : null;
+
+                                if (aLoc?.lng != null && tLoc?.lng != null) {
+                                    const diff = Math.abs(Number(aLoc.lng) - Number(tLoc.lng));
+                                    // If edge crosses more than half the map width, it wraps
+                                    if (diff > mapImageRef.current.width / 2) {
+                                        hidden = true; // Use custom drawing for these
+                                    }
                                 }
                             }
 
@@ -806,22 +805,16 @@
                     if (!showMapMode || !mapImageRef.current) return;
 
                     const mapImg = mapImageRef.current;
-                    const viewPos = networkRef.current.getViewPosition();
-                    const scale = networkRef.current.getScale();
 
-                    // World Width in px: 360 deg * 15px/deg = 5400px
-                    const worldWidth = 360 * DEG_TO_PX;
-                    const worldHeight = worldWidth / mapAspectRatio; // Dynamic Height
+                    // Use image pixel dimensions directly (same as MapView)
+                    // MapView bounds: [[-img.height/2, -img.width/2], [img.height/2, img.width/2]]
+                    const worldWidth = mapImg.width;
+                    const worldHeight = mapImg.height;
 
                     // Draw centered at 0,0
-                    // Map image covers -180 to 180 Longitude => x: -2700 to 2700
-                    // Image aspect ratio might differ, but let's stretch to cover world coordinates
-
                     const drawMap = (offsetX) => {
                         ctx.save();
                         ctx.globalAlpha = 0.5;
-                        // Image, x, y, width, height. 
-                        // Target map: x from -2700 to 2700. Image center at 0,0.
                         ctx.drawImage(mapImg, -worldWidth / 2 + offsetX, -worldHeight / 2, worldWidth, worldHeight);
                         ctx.restore();
                     };
@@ -832,10 +825,10 @@
                 });
 
                 networkRef.current.on("afterDrawing", (ctx) => {
-                    if (!showMapMode) return;
+                    if (!showMapMode || !mapImageRef.current) return;
 
                     // Custom Edge Wrapping Drawing
-                    const worldWidth = 360 * DEG_TO_PX;
+                    const worldWidth = mapImageRef.current.width;
 
                     edges.forEach(edge => {
                         if (edge.isWrapped) {
@@ -852,32 +845,20 @@
                                 ctx.lineWidth = 1;
                                 ctx.setLineDash([5, 5]); // Dashed line for wrapped connections
 
-                                // Determine direction. 
-                                // If from.x < to.x, traditionally goes right. But wrapped means |diff| > 180.
-                                // e.g. From -170 (Left), To +170 (Right). Valid shortest path is crossing -180/180.
-                                // Distance regular: 340. 
-                                // Wrap left from From: -170 -> -180 -> +180 -> +170.
-
-                                // Draw Line 1: From -> Nearest Edge
                                 let leftX = -worldWidth / 2;
                                 let rightX = worldWidth / 2;
 
-                                // If NodeA is negative(West) and NodeB is positive(East), and we wrap...
-                                // NodeA goes West to edge. NodeB comes from East edge.
-
-                                if (posFrom.x < posTo.x) {
-                                    // Normally Left to Right. Wrap means Left->LeftEdge, Right->RightEdge
+                                if (posFrom.x < posTo.x) { // Left to Right wrap
                                     ctx.beginPath();
                                     ctx.moveTo(posFrom.x, posFrom.y);
-                                    ctx.lineTo(leftX, (posFrom.y + posTo.y) / 2); // simplified y-interp
+                                    ctx.lineTo(leftX, (posFrom.y + posTo.y) / 2);
                                     ctx.stroke();
 
                                     ctx.beginPath();
                                     ctx.moveTo(rightX, (posFrom.y + posTo.y) / 2);
                                     ctx.lineTo(posTo.x, posTo.y);
                                     ctx.stroke();
-                                } else {
-                                    // Right to Left. Wrap means Right->RightEdge, Left->LeftEdge
+                                } else { // Right to Left wrap
                                     ctx.beginPath();
                                     ctx.moveTo(posFrom.x, posFrom.y);
                                     ctx.lineTo(rightX, (posFrom.y + posTo.y) / 2);
@@ -888,144 +869,144 @@
                                     ctx.lineTo(posTo.x, posTo.y);
                                     ctx.stroke();
                                 }
-
                                 ctx.restore();
                             }
                         }
                     });
                 });
+            });
 
-                networkRef.current.on("click", function (params) {
-                    if (params.nodes.length > 0) {
-                        const nodeId = params.nodes[0];
-                        // check if it is a cluster
-                        if (networkRef.current.isCluster(nodeId)) {
-                            networkRef.current.openCluster(nodeId);
-                            return;
-                        }
-                        if (onArticleSelect) onArticleSelect(idMap.get(nodeId));
+            networkRef.current.on("click", function (params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    // check if it is a cluster
+                    if (networkRef.current.isCluster(nodeId)) {
+                        networkRef.current.openCluster(nodeId);
+                        return;
                     }
-                });
-
-                // Apply Clustering if groupingTag is set
-                if (groupingTag) {
-                    const clusterOptions = {
-                        joinCondition: (nodeOptions) => {
-                            return nodeOptions.tags && nodeOptions.tags.includes(groupingTag);
-                        },
-                        clusterNodeProperties: {
-                            id: 'cluster_' + groupingTag,
-                            label: groupingTag,
-                            color: '#fbbf24',
-                            shape: 'ellipse',
-                            borderWidth: 3,
-                            font: { size: 18, color: '#000', face: 'arial' },
-                            allowSingleNodeCluster: true
-                        }
-                    };
-                    networkRef.current.cluster(clusterOptions);
+                    if (onArticleSelect) onArticleSelect(idMap.get(nodeId));
                 }
+            });
 
-                return () => {
-                    if (networkRef.current) networkRef.current.destroy();
+            // Apply Clustering if groupingTag is set
+            if (groupingTag) {
+                const clusterOptions = {
+                    joinCondition: (nodeOptions) => {
+                        return nodeOptions.tags && nodeOptions.tags.includes(groupingTag);
+                    },
+                    clusterNodeProperties: {
+                        id: 'cluster_' + groupingTag,
+                        label: groupingTag,
+                        color: '#fbbf24',
+                        shape: 'ellipse',
+                        borderWidth: 3,
+                        font: { size: 18, color: '#000', face: 'arial' },
+                        allowSingleNodeCluster: true
+                    }
                 };
-            }, [articles, searchQuery, groupingTag, showTagNodes, showMapMode, worldData, targetYear, mapAspectRatio]); // Re-render when these change
+                networkRef.current.cluster(clusterOptions);
+            }
 
-            // Handle Focus on External Select (or Search Result Click if we implement that)
-            React.useEffect(() => {
-                if (focusedArticle && networkRef.current) {
-                    // check if node exists or is in cluster
-                    const indices = networkRef.current.body.nodeIndices;
-                    if (indices.includes(focusedArticle.id)) {
-                        networkRef.current.focus(focusedArticle.id, { animation: true, scale: 1.0 });
-                        networkRef.current.selectNodes([focusedArticle.id]);
-                    }
+            return () => {
+                if (networkRef.current) networkRef.current.destroy();
+            };
+        }, [articles, searchQuery, groupingTag, showTagNodes, showMapMode, worldData, targetYear, mapAspectRatio]); // Re-render when these change
+
+        // Handle Focus on External Select (or Search Result Click if we implement that)
+        React.useEffect(() => {
+            if (focusedArticle && networkRef.current) {
+                // check if node exists or is in cluster
+                const indices = networkRef.current.body.nodeIndices;
+                if (indices.includes(focusedArticle.id)) {
+                    networkRef.current.focus(focusedArticle.id, { animation: true, scale: 1.0 });
+                    networkRef.current.selectNodes([focusedArticle.id]);
                 }
-            }, [focusedArticle]);
+            }
+        }, [focusedArticle]);
 
-            return (
-                <div className="h-full flex flex-col bg-white/10 backdrop-blur rounded-xl border border-white/10 overflow-hidden relative group">
-                    <div className="p-4 bg-white/80 border-b flex justify-between items-center">
-                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                            <Icon name="share-2" className="text-indigo-500" /> 相関図ネットワーク
-                        </h2>
-                        <div className="text-sm text-gray-500 hidden md:block">
-                            ノードをダブルクリックで開く / タグでバブル化
-                        </div>
+        return (
+            <div className="h-full flex flex-col bg-white/10 backdrop-blur rounded-xl border border-white/10 overflow-hidden relative group">
+                <div className="p-4 bg-white/80 border-b flex justify-between items-center">
+                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                        <Icon name="share-2" className="text-indigo-500" /> 相関図ネットワーク
+                    </h2>
+                    <div className="text-sm text-gray-500 hidden md:block">
+                        ノードをダブルクリックで開く / タグでバブル化
                     </div>
-
-                    {/* Graph Controls Overlay */}
-                    <div className="absolute top-16 left-4 z-10 flex flex-col gap-2 w-64">
-                        <input
-                            className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                            placeholder="検索 (ノード強調)..."
-                            value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value)}
-                        />
-                        <div className="relative">
-                            <input
-                                className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                                placeholder="タグでバブル化 (例: History)..."
-                                value={groupingTag}
-                                onChange={e => setGroupingTag(e.target.value)}
-                                list="grouping-tags-list"
-                            />
-                            <datalist id="grouping-tags-list">
-                                {availableTags.slice(0, 50).map(t => <option key={t} value={t} />)}
-                            </datalist>
-                            {groupingTag && (
-                                <button onClick={() => setGroupingTag('')} className="absolute right-2 top-1.5 text-gray-400 hover:text-gray-600">
-                                    <Icon name="x" size={14} />
-                                </button>
-                            )}
-
-                        </div>
-
-                        <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
-                            <input
-                                type="checkbox"
-                                checked={showTagNodes}
-                                onChange={e => setShowTagNodes(e.target.checked)}
-                                className="rounded text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span className="text-sm font-bold text-gray-700">タグをノード化 (Hub)</span>
-                        </label>
-
-                        <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
-                            <input
-                                type="checkbox"
-                                checked={showMapMode}
-                                onChange={e => setShowMapMode(e.target.checked)}
-                                className="rounded text-emerald-600 focus:ring-emerald-500"
-                            />
-                            <span className="text-sm font-bold text-gray-700">地図背景モード</span>
-                        </label>
-
-                        {yearRange.min !== yearRange.max && targetYear !== null && (
-                            <div className="bg-white/90 border border-gray-300 rounded px-3 py-2 shadow-sm space-y-1">
-                                <label className="text-xs font-bold text-gray-500 flex justify-between">
-                                    <span>時代: {targetYear}年</span>
-                                    <button onClick={() => setTargetYear(null)} className="text-[10px] text-red-500 hover:underline">解除</button>
-                                </label>
-                                <input
-                                    type="range"
-                                    min={yearRange.min}
-                                    max={yearRange.max}
-                                    value={targetYear}
-                                    onChange={e => setTargetYear(Number(e.target.value))}
-                                    className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                                />
-                                <div className="flex justify-between text-[10px] text-gray-400 font-mono">
-                                    <span>{yearRange.min}</span>
-                                    <span>{yearRange.max}</span>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div ref={containerRef} className="flex-1 bg-gray-50/50" style={{ minHeight: '500px' }}></div>
                 </div>
-            );
+
+                {/* Graph Controls Overlay */}
+                <div className="absolute top-16 left-4 z-10 flex flex-col gap-2 w-64">
+                    <input
+                        className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        placeholder="検索 (ノード強調)..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                    />
+                    <div className="relative">
+                        <input
+                            className="w-full bg-white/90 border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                            placeholder="タグでバブル化 (例: History)..."
+                            value={groupingTag}
+                            onChange={e => setGroupingTag(e.target.value)}
+                            list="grouping-tags-list"
+                        />
+                        <datalist id="grouping-tags-list">
+                            {availableTags.slice(0, 50).map(t => <option key={t} value={t} />)}
+                        </datalist>
+                        {groupingTag && (
+                            <button onClick={() => setGroupingTag('')} className="absolute right-2 top-1.5 text-gray-400 hover:text-gray-600">
+                                <Icon name="x" size={14} />
+                            </button>
+                        )}
+
+                    </div>
+
+                    <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
+                        <input
+                            type="checkbox"
+                            checked={showTagNodes}
+                            onChange={e => setShowTagNodes(e.target.checked)}
+                            className="rounded text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm font-bold text-gray-700">タグをノード化 (Hub)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer bg-white/90 border border-gray-300 rounded px-3 py-1.5 shadow-sm hover:bg-white transition-colors">
+                        <input
+                            type="checkbox"
+                            checked={showMapMode}
+                            onChange={e => setShowMapMode(e.target.checked)}
+                            className="rounded text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-sm font-bold text-gray-700">地図背景モード</span>
+                    </label>
+
+                    {yearRange.min !== yearRange.max && targetYear !== null && (
+                        <div className="bg-white/90 border border-gray-300 rounded px-3 py-2 shadow-sm space-y-1">
+                            <label className="text-xs font-bold text-gray-500 flex justify-between">
+                                <span>時代: {targetYear}年</span>
+                                <button onClick={() => setTargetYear(null)} className="text-[10px] text-red-500 hover:underline">解除</button>
+                            </label>
+                            <input
+                                type="range"
+                                min={yearRange.min}
+                                max={yearRange.max}
+                                value={targetYear}
+                                onChange={e => setTargetYear(Number(e.target.value))}
+                                className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                            />
+                            <div className="flex justify-between text-[10px] text-gray-400 font-mono">
+                                <span>{yearRange.min}</span>
+                                <span>{yearRange.max}</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div ref={containerRef} className="flex-1 bg-gray-50/50" style={{ minHeight: '500px' }}></div>
+            </div>
+        );
         };
         const computeRegionTags = (locations = [], rules = REGION_TAG_RULES_DEFAULT) => {
             const tags = new Set();
