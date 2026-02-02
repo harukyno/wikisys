@@ -907,7 +907,7 @@
                 return () => {
                     if (networkRef.current) networkRef.current.destroy();
                 };
-            }, [articles, searchQuery, groupingTag, showTagNodes, showMapMode, worldData]); // Re-render when these change
+            }, [articles, searchQuery, groupingTag, showTagNodes, showMapMode, worldData, targetYear, mapAspectRatio]); // Re-render when these change
 
             // Handle Focus on External Select (or Search Result Click if we implement that)
             React.useEffect(() => {
