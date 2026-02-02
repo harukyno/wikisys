@@ -645,7 +645,7 @@
                         fixed = false;
                     }
 
-                    nodes.push({
+                    const nodeData = {
                         id: a.id,
                         label: a.title,
                         group: a.type,
@@ -653,7 +653,6 @@
                         mass: nodeMass,
                         x: initialX,
                         y: initialY,
-                        fixed: fixed,
                         color: { background: color, border: borderColor },
                         borderWidth: borderWidth,
                         shape: 'dot',
@@ -662,7 +661,14 @@
                         // Custom props for edge logic
                         lng: Number(a.lng) || 0,
                         hasLoc: (a.lng != null)
-                    });
+                    };
+
+                    // Only set fixed if it's actually fixed (vis.js requires object or undefined, not false)
+                    if (fixed) {
+                        nodeData.fixed = fixed;
+                    }
+
+                    nodes.push(nodeData);
 
                     // Create Edges from [[Link]]
                     const linkRegex = /\[\[(.*?)(?:\|(.*?))?\]\]/g;
