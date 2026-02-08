@@ -12,7 +12,6 @@ const DEFAULT_CONFIG = {
 // 初期のデータID
 const DEFAULT_APP_CONTEXT_ID = 'world-weaver-wiki-v4';
 
-const DEFAULT_APP_CONTEXT_ID = 'world-weaver-wiki-v4';
 
 const DEFAULT_ARTICLE_TEMPLATES = [
     {
