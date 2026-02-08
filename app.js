@@ -12,6 +12,61 @@ const DEFAULT_CONFIG = {
 // 初期のデータID
 const DEFAULT_APP_CONTEXT_ID = 'world-weaver-wiki-v4';
 
+const DEFAULT_APP_CONTEXT_ID = 'world-weaver-wiki-v4';
+
+const DEFAULT_ARTICLE_TEMPLATES = [
+    {
+        label: '人物 (Person)',
+        data: {
+            title: '人物名',
+            type: 'person',
+            folder: '人物',
+            tags: ['人物'],
+            contentHtml: '<h2>概要</h2><p>生没年、出身地、主な業績など。</p><h2>生涯</h2><p>幼少期から晩年まで。</p><h2>人物像</h2><p>性格、外見、エピソード。</p>'
+        }
+    },
+    {
+        label: '国・地域 (Nation/Region)',
+        data: {
+            title: '国・地域名',
+            type: 'region',
+            folder: '世界/大陸名',
+            tags: ['地名'],
+            contentHtml: '<h2>概要</h2><p>位置、主要都市、人口など。</p><h2>歴史</h2><p>建国から現在まで。</p><h2>地理</h2><p>地形、気候、特産品。</p><h2>文化</h2><p>言語、宗教、風習。</p>'
+        }
+    },
+    {
+        label: '出来事 (Event)',
+        data: {
+            title: '出来事の名称',
+            type: 'event',
+            folder: '歴史/時代',
+            tags: ['事件'],
+            contentHtml: '<h2>概要</h2><p>いつ、どこで、何が起きたか。</p><h2>背景</h2><p>発生に至る経緯。</p><h2>経過</h2><p>詳細な流れ。</p><h2>結果と影響</h2><p>その後の変化。</p>'
+        }
+    },
+    {
+        label: '組織 (Organization)',
+        data: {
+            title: '組織名',
+            type: 'organization',
+            folder: '組織',
+            tags: ['組織'],
+            contentHtml: '<h2>概要</h2><p>設立目的、活動内容。</p><h2>沿革</h2><p>設立から現在まで。</p><h2>組織構成</h2><p>代表者、部署。</p>'
+        }
+    },
+    {
+        label: '思想・宗教 (Ideology)',
+        data: {
+            title: '名称',
+            type: 'ideology',
+            folder: '文化/宗教',
+            tags: ['宗教', '思想'],
+            contentHtml: '<h2>教義・思想</h2><p>中心となる考え方。</p><h2>歴史</h2><p>発祥と伝播。</p><h2>儀式・慣習</h2><p>具体的な実践。</p>'
+        }
+    }
+];
+
 const ARTICLE_TYPES = {
     person: { label: '人物', color: 'bg-blue-100 text-blue-800', icon: 'user' },
     event: { label: '事象', color: 'bg-red-100 text-red-800', icon: 'flame' },
@@ -4862,7 +4917,34 @@ const App = () => {
                                     {canIApprove ? '編集' : '編集リクエスト'}
                                     {!canIApprove && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded">※承認待ちとなります</span>}
                                 </h2>
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 items-center">
+                                    <select
+                                        className="text-xs border p-1 rounded bg-white text-gray-600 mr-2"
+                                        onChange={(e) => {
+                                            const idx = e.target.selectedIndex;
+                                            if (idx > 0) {
+                                                const templates = worldData?.articleTemplates || DEFAULT_ARTICLE_TEMPLATES;
+                                                const tmpl = templates[idx - 1]; // -1 because first option is placeholder
+                                                if (confirm(`テンプレート「${tmpl.label}」を適用しますか？\n入力中の内容は上書きされます。`)) {
+                                                    setFormData(prev => ({
+                                                        ...prev,
+                                                        ...tmpl.data,
+                                                        // Keep ID and timestamps if editing existing, though usually templates are for new
+                                                        id: prev.id,
+                                                        createdAt: prev.createdAt,
+                                                        createdBy: prev.createdBy
+                                                    }));
+                                                    if (tmpl.data.tags) {
+                                                        setTagInput(tmpl.data.tags.join(', '));
+                                                    }
+                                                }
+                                                e.target.selectedIndex = 0; // reset
+                                            }
+                                        }}
+                                    >
+                                        <option value="">（テンプレートを選択）</option>
+                                        {(worldData?.articleTemplates || DEFAULT_ARTICLE_TEMPLATES).map((t, i) => <option key={i} value={i}>{t.label}</option>)}
+                                    </select>
                                     <button onClick={() => setViewMode(previousViewMode || 'timeline_large')} className="px-4 py-2 rounded bg-gray-200 text-sm">キャンセル</button>
                                     <button onClick={handleSaveArticle} className={`px-6 py-2 rounded text-white font-bold text-sm ${canIApprove ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
                                         {canIApprove ? '保存' : '申請する'}
@@ -5111,6 +5193,25 @@ const App = () => {
                                                 } catch (e) { alert('保存失敗: ' + e.message); }
                                             }
                                         }} className="px-3 py-1.5 bg-indigo-500 text-white rounded text-sm">設定</button>
+                                    </div>
+                                    <div className="flex items-center justify-between pt-4 border-t">
+                                        <div>
+                                            <div className="text-sm font-bold">記事テンプレート設定</div>
+                                            <div className="text-xs text-gray-500">JSON形式で編集</div>
+                                        </div>
+                                        <button onClick={async () => {
+                                            const current = JSON.stringify(worldData?.articleTemplates || DEFAULT_ARTICLE_TEMPLATES, null, 2);
+                                            const newJson = prompt("テンプレートJSONを編集してください:", current);
+                                            if (newJson !== null) {
+                                                try {
+                                                    const parsed = JSON.parse(newJson);
+                                                    if (!Array.isArray(parsed)) throw new Error("配列である必要があります");
+                                                    const { doc, updateDoc } = window.firebaseModules;
+                                                    await updateDoc(doc(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId), { articleTemplates: parsed });
+                                                    alert('テンプレートを保存しました');
+                                                } catch (e) { alert('保存失敗: JSON形式が正しくありません\n' + e.message); }
+                                            }
+                                        }} className="px-3 py-1.5 bg-indigo-500 text-white rounded text-sm">編集</button>
                                     </div>
                                 </div>
                             </div>
