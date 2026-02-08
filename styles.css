@@ -1,0 +1,235 @@
+﻿        /* フォント指定 */
+        body {
+            font-family: 'Noto Sans JP', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        .serif {
+            font-family: 'Shippori Mincho', serif;
+        }
+
+        /* その他のスタイル */
+        #map-container {
+            height: 100%;
+            width: 100%;
+            z-index: 0;
+        }
+
+        .wiki-link {
+            color: #2563eb;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        .wiki-link:hover {
+            color: #1d4ed8;
+            background-color: rgba(37, 99, 235, 0.1);
+        }
+
+        .folder-tree-item {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .folder-tree-item:hover {
+            background-color: #f3f4f6;
+        }
+
+        .rich-editor h1 {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin: 0.5em 0;
+        }
+
+        .rich-editor h2 {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin: 0.5em 0;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .rich-editor ul {
+            list-style-type: disc;
+            margin-left: 1.5em;
+        }
+
+        .rich-editor ol {
+            list-style-type: decimal;
+            margin-left: 1.5em;
+        }
+
+        .rich-editor blockquote {
+            border-left: 4px solid #ccc;
+            padding-left: 1em;
+            color: #666;
+        }
+
+        /* Quill Editor Customization */
+        .ql-container {
+            font-family: 'Noto Sans JP', sans-serif;
+            font-size: 16px;
+        }
+
+        .ql-editor {
+            min-height: 200px;
+        }
+
+        /* カスタムスクロールバー */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 3px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #aaa;
+        }
+
+        /* テーブルの基本スタイル（記事表示用） */
+        .prose table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 1rem 0;
+            border: 1px solid #a2a9b1;
+            background-color: #fff;
+        }
+
+        .prose th,
+        .prose td {
+            border: 1px solid #a2a9b1;
+            padding: 8px;
+            text-align: left;
+        }
+
+        .prose th {
+            background-color: #eaecf0;
+            font-weight: bold;
+        }
+
+        /* ダークモード環境用（.prose-invertなど） */
+        .prose-invert table,
+        .prose-invert th,
+        .prose-invert td {
+            border-color: #475569;
+            /* slate-600 */
+        }
+
+        /* Placeholder style when table HTML is omitted from editor content */
+        .csv-block .csv-placeholder {
+            border: 1px dashed #666;
+            padding: 8px;
+            background: #fff;
+            color: #222;
+            font-size: 13px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        /* スナップスクロール用 */
+        .snap-y-mandatory {
+            scroll-snap-type: y mandatory;
+        }
+
+        .snap-center {
+            scroll-snap-align: center;
+        }
+
+        .snap-x-mandatory {
+            scroll-snap-type: x mandatory;
+        }
+
+        .snap-start {
+            scroll-snap-align: start;
+        }
+
+        /* マインドマップ風ライン */
+        .mindmap-branch {
+            position: absolute;
+            left: -2rem;
+            top: 50%;
+            width: 2rem;
+            height: 1px;
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+
+        /* タイムラインメーター */
+        .timeline-ruler {
+            background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.2) 1px, transparent 1px);
+            background-size: 100% 40px;
+        }
+
+        /* スムーズスクロール */
+        .scroll-smooth {
+            scroll-behavior: smooth;
+        }
+
+        /* マップラベル */
+        .leaflet-tooltip.map-label {
+            background-color: rgba(255, 255, 255, 0.85);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+            font-size: 11px;
+            font-weight: bold;
+            color: #333;
+            padding: 0px 4px;
+            border-radius: 4px;
+            margin-top: -3px;
+        }
+
+        /* MediaWiki Style */
+        .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+            font-family: 'Linux Libertine', 'Georgia', 'Times', serif;
+            border-bottom: 1px solid #a2a9b1;
+            padding-bottom: 0.25em;
+            margin-bottom: 0.5em;
+            margin-top: 1em;
+            font-weight: normal;
+        }
+
+        .prose h1 { font-size: 1.8em; }
+        .prose h2 { font-size: 1.5em; }
+        .prose h3 { font-size: 1.2em; border-bottom: none; font-weight: bold; }
+
+        .prose {
+            font-family: sans-serif;
+            color: #202122;
+            line-height: 1.6;
+            font-size: 16px;
+            max-width: 100%;
+        }
+
+        .prose p {
+            margin-bottom: 0.5em;
+            margin-top: 0.5em;
+        }
+
+        .prose blockquote {
+            background-color: #f8f9fa;
+            border-left: 4px solid #eaecf0;
+            padding: 8px 16px; 
+            font-style: normal;
+        }
+
+        .prose a {
+            color: #3366cc;
+            text-decoration: none;
+        }
+        .prose a:hover {
+            text-decoration: underline;
+        }
+
+        /* Sidebar Styles */
+        .sidebar-link {
+            color: #0645ad;
+        }
+        .sidebar-link:hover {
+            text-decoration: underline;
+        }
