@@ -3729,11 +3729,20 @@ const MediaWikiImporter = ({ db, appContextId, user, onImportComplete }) => {
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(text, "text/xml");
 
-            const siteName = xmlDoc.querySelector('sitename')?.textContent || 'Imported World';
-            const pages = Array.from(xmlDoc.querySelectorAll('page'));
+            // パースエラーのチェック
+            const errorNode = xmlDoc.getElementsByTagName("parsererror")[0];
+            if (errorNode) {
+                throw new Error("XMLのパースに失敗しました。ファイル形式を確認してください。");
+            }
+
+            // getElementsByTagName は名前空間に関係なく要素を取得できるため、こちらを使用する
+            const siteNameNode = xmlDoc.getElementsByTagName('sitename')[0];
+            const siteName = siteNameNode?.textContent || 'Imported World';
+
+            const pages = Array.from(xmlDoc.getElementsByTagName('page'));
 
             if (pages.length === 0) {
-                throw new Error('有効なページが見つかりませんでした');
+                throw new Error('有効なページが見つかりませんでした。MediaWikiのエクスポート形式(XML)であることを確認してください。');
             }
 
             setProgress(`${pages.length} ページを検出しました。作成中...`);
@@ -3762,10 +3771,10 @@ const MediaWikiImporter = ({ db, appContextId, user, onImportComplete }) => {
                 const chunk = pages.slice(i, i + BATCH_SIZE);
 
                 chunk.forEach(page => {
-                    const title = page.querySelector('title')?.textContent || 'No Title';
-                    const revision = page.querySelector('revision');
-                    const rawContent = revision?.querySelector('text')?.textContent || '';
-                    const timestamp = revision?.querySelector('timestamp')?.textContent;
+                    const title = page.getElementsByTagName('title')[0]?.textContent || 'No Title';
+                    const revision = page.getElementsByTagName('revision')[0];
+                    const rawContent = revision?.getElementsByTagName('text')[0]?.textContent || '';
+                    const timestamp = revision?.getElementsByTagName('timestamp')[0]?.textContent;
 
                     // Extract Categories
                     const tags = [];
@@ -3824,6 +3833,162 @@ const MediaWikiImporter = ({ db, appContextId, user, onImportComplete }) => {
                 <div className="text-gray-500 font-bold mb-1"><Icon name="upload" /> MediaWiki XML インポート</div>
                 <div className="text-xs text-gray-400">Miraheze (Special:Export) のXMLファイルを読み込み</div>
                 <input type="file" accept=".xml" className="hidden" onChange={handleFile} disabled={importing} />
+            </label>
+            {importing && <div className="text-xs text-center text-indigo-600 font-bold mt-2">{progress}</div>}
+        </div>
+    );
+};
+
+// --- Seesaa (Movable Type) Importer ---
+const SeesaaImporter = ({ db, appContextId, user, onImportComplete }) => {
+    const [importing, setImporting] = React.useState(false);
+    const [progress, setProgress] = React.useState('');
+
+    const parseMTLog = (text) => {
+        // MT export format: Entries separated by "--------" (8 dashes)
+        const entries = text.split(/^--------\s*$/gm).filter(e => e.trim().length > 0);
+        const parsedEntries = [];
+
+        for (const entryRaw of entries) {
+            const lines = entryRaw.split(/\r?\n/);
+            const meta = {};
+            let body = '';
+            let extendedBody = '';
+            let keywords = '';
+            let currentSection = null; // 'BODY', 'EXTENDED BODY', 'KEYWORDS', etc.
+
+            // First part is meta headers until "-----"
+            let separatorIndex = lines.findIndex(l => l.trim() === '-----');
+            if (separatorIndex === -1) separatorIndex = lines.length; // Fallback
+
+            // Parse Meta
+            for (let i = 0; i < separatorIndex; i++) {
+                const line = lines[i];
+                const match = line.match(/^([A-Z ]+): (.*)$/);
+                if (match) {
+                    meta[match[1].trim()] = match[2].trim();
+                }
+            }
+
+            // Parse Body Sections
+            for (let i = separatorIndex + 1; i < lines.length; i++) {
+                const line = lines[i];
+                const sectionMatch = line.match(/^([A-Z ]+):$/);
+
+                if (sectionMatch) {
+                    currentSection = sectionMatch[1].trim();
+                } else if (currentSection === 'BODY') {
+                    body += line + '\n';
+                } else if (currentSection === 'EXTENDED BODY') {
+                    extendedBody += line + '\n';
+                } else if (currentSection === 'KEYWORDS') {
+                    keywords = line; // Usually one line?
+                }
+            }
+
+            if (meta.TITLE) {
+                parsedEntries.push({
+                    title: meta.TITLE,
+                    date: meta.DATE ? new Date(meta.DATE) : new Date(),
+                    content: (body + '\n' + extendedBody).trim(),
+                    tags: keywords ? keywords.split(',').map(k => k.trim()).filter(k => k) : [],
+                    category: meta.CATEGORY ? [meta.CATEGORY] : [],
+                    basename: meta.BASENAME
+                });
+            }
+        }
+        return parsedEntries;
+    };
+
+    const handleFile = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!confirm('このSeesaa(MT形式)ファイルから新しい世界を作成しますか？')) return;
+
+        setImporting(true);
+        setProgress('解析中...');
+
+        try {
+            const text = await file.text();
+
+            const articles = parseMTLog(text);
+
+            if (articles.length === 0) {
+                throw new Error('有効な記事が見つかりませんでした。MT形式(--------区切り)であることを確認してください。');
+            }
+
+            setProgress(`${articles.length} 記事を検出しました。作成中...`);
+
+            // Create World
+            const { addDoc, collection, doc, writeBatch, serverTimestamp } = window.firebaseModules;
+            const siteName = `Imported Seesaa Blog ${new Date().toLocaleDateString()}`;
+
+            const worldData = {
+                name: siteName,
+                description: `Imported from Seesaa/MT Log at ${new Date().toLocaleString()}`,
+                createdBy: user.uid,
+                createdAt: serverTimestamp(),
+                isPublic: true,
+                mainPageId: ''
+            };
+
+            const worldRef = await addDoc(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds'), worldData);
+            const worldId = worldRef.id;
+
+            // Process Articles in Batches
+            const BATCH_SIZE = 400;
+            let processed = 0;
+
+            for (let i = 0; i < articles.length; i += BATCH_SIZE) {
+                const batch = writeBatch(db);
+                const chunk = articles.slice(i, i + BATCH_SIZE);
+
+                chunk.forEach(entry => {
+                    const combinedTags = Array.from(new Set([...entry.tags, ...entry.category]));
+                    const contentHtml = entry.content.replace(/\n/g, '<br/>');
+
+                    const articleData = {
+                        title: entry.title,
+                        contentHtml: contentHtml,
+                        tags: combinedTags,
+                        type: 'article',
+                        createdAt: entry.date,
+                        createdBy: user.uid,
+                        updatedAt: serverTimestamp(),
+                        importance: 3,
+                        year: entry.date.getFullYear(),
+                        noYear: false,
+                        dateStr: entry.date.toLocaleDateString()
+                    };
+
+                    const newDocRef = doc(collection(db, 'artifacts', appContextId, 'public', 'data', 'worlds', worldId, 'articles'));
+                    batch.set(newDocRef, articleData);
+                });
+
+                await batch.commit();
+                processed += chunk.length;
+                setProgress(`${processed} / ${articles.length} 記事作成完了...`);
+            }
+
+            alert('インポート完了！');
+            onImportComplete(worldId);
+
+        } catch (err) {
+            console.error(err);
+            alert('インポート失敗: ' + err.message);
+        } finally {
+            setImporting(false);
+            setProgress('');
+            e.target.value = '';
+        }
+    };
+
+    return (
+        <div className="mt-4 border-t pt-4">
+            <label className={`block w-full text-center border-2 border-dashed border-gray-300 rounded p-4 cursor-pointer hover:bg-gray-50 transition ${importing ? 'opacity-50 pointer-events-none' : ''}`}>
+                <div className="text-gray-500 font-bold mb-1"><Icon name="upload" /> Seesaa/MT形式 インポート</div>
+                <div className="text-xs text-gray-400">Seesaaブログ等のエクスポートファイルを読み込み</div>
+                <input type="file" className="hidden" onChange={handleFile} disabled={importing} />
             </label>
             {importing && <div className="text-xs text-center text-indigo-600 font-bold mt-2">{progress}</div>}
         </div>
@@ -4620,6 +4785,7 @@ const App = () => {
                                 <input className="w-full border p-2 rounded" placeholder="名前" value={authForm.worldName} onChange={e => setAuthForm({ ...authForm, worldName: e.target.value })} />
                                 <button onClick={handleCreateWorld} className="w-full bg-emerald-600 text-white py-2 rounded font-bold">創造</button>
                                 <MediaWikiImporter db={db} appContextId={appContextId} user={user} onImportComplete={(id) => { setWorldId(id); setViewMode('timeline_large'); }} />
+                                <SeesaaImporter db={db} appContextId={appContextId} user={user} onImportComplete={(id) => { setWorldId(id); setViewMode('timeline_large'); }} />
                             </div>
                         ) : (
                             <div className="text-sm text-gray-400 py-8 text-center bg-gray-50 rounded">ログインすると新しい世界を作成できます</div>
